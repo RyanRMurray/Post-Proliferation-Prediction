@@ -1,4 +1,7 @@
-# Byte-compiled / optimized / DLL files
+# Project Specific
+.twitter_keys.yaml
+
+# Byte-compiled / optimized / DLL file
 __pycache__/
 *.py[cod]
 *$py.class
@@ -130,3 +133,4 @@ dmypy.json
 
 # Archive/twitter data
 /Data/*
+
