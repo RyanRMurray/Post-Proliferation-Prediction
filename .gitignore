@@ -1,5 +1,6 @@
 # Project Specific
 .twitter_keys.yaml
+.vscode/
 
 # Byte-compiled / optimized / DLL file
 __pycache__/
