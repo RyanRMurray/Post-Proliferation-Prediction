@@ -59,7 +59,7 @@ def main():
             print(e)
             elapsed  = query_end - query_start
             timeout = 60*16 - elapsed
-            time.sleep(timeout)
+            time.sleep(max(0,timeout))
             query_start = time.time()
         else:
             #update our newest tweet id and query
