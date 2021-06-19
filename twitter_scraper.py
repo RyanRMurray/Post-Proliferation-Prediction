@@ -46,7 +46,7 @@ def main():
     collection_query  = {
         #note: get every tweet tagged english. weird negated statement because API doesn't let you just ask for every tweet in recent
         "query": "lang:en the -the",
-        "max_results": "10",
+        "max_results": "100",
         "tweet.fields": "author_id,created_at,in_reply_to_user_id,entities,public_metrics"
     }
     while len(tweet_ids) < collection_target:
