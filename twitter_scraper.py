@@ -1,18 +1,28 @@
 from typing import Collection
 from searchtweets import ResultStream, load_credentials
 from pathlib import Path
+from collections import deque
 import os
 import json
 import time
 import requests
 
-#collection parameters
-collection_target = 210
-collection_query  = {"query": "the OR i OR to OR a OR and OR is OR in OR has:media", "tweet.fields": "author_id,created_at,in_reply_to_user_id,entities,public_metrics"}
-collection_header = {"Authorization": "Bearer {}".format(os.environ.get("BEARER_TOKEN"))}
 
-def make_query(header,query):
-    result = requests.request("GET", "https://api.twitter.com/2/tweets/search/recent", headers=header,params=query)
+collections_path = Path("./Data/collection.json")
+updates_path = Path("./Data/updates.json")
+
+#collection parameters
+header = {"Authorization": "Bearer {}".format(os.environ.get("BEARER_TOKEN"))}
+collection_endpoint = "https://api.twitter.com/2/tweets/search/recent"
+#number of tweets to collect
+collection_target = 10
+#update rate in seconds
+update_rate = 15 * 60
+#number of times to update
+update_iterations = 40
+
+def make_query(endpoint, header,query):
+    result = requests.request("GET", endpoint, headers=header,params=query)
     if result.status_code != 200:
         raise Exception(result.status_code,result.text)
     return result.json()
@@ -22,45 +32,104 @@ def main():
 
     #check if collection file exists
     #if so, record the ids of the tweets
-    collections_path = Path("./Data/collection.json")
 
     if collections_path.is_file():
-        start = 0
-        with open(collections_path, "r") as file:
-            collection = json.loads(file.read())
-
-        for tweet in collection["tweets"]:
-            tweet_ids.add(tweet["id"])
-    else:
-        collection = json.loads('{"tweets":[]}')
+        for line in open(collections_path, "r"):
+            tweet_ids.add(int(json.loads(line)["id"]))
     
     #if we dont have enough tweets, collect more
     #note: we can query recent 450 times every 15 minutes.
+    update_start = time.time()
     query_start = time.time()
+    newest_id = "0"
+    #initial collection query: note no since_id field
+    collection_query  = {
+        #note: get every tweet tagged english. weird negated statement because API doesn't let you just ask for every tweet in recent
+        "query": "lang:en the -the",
+        "max_results": "10",
+        "tweet.fields": "author_id,created_at,in_reply_to_user_id,entities,public_metrics"
+    }
     while len(tweet_ids) < collection_target:
-
         try:
-            result = make_query(collection_header,collection_query)
+            result = make_query(collection_endpoint, header,collection_query)
         except Exception as e:
             #wait for next round of queries
             query_end = time.time()
             print("Rate limit exceeded!")
+            print(e)
             elapsed  = query_end - query_start
             timeout = 60*16 - elapsed
             time.sleep(timeout)
             query_start = time.time()
         else:
-            for tweet in result["data"]:
-                if tweet["id"] not in tweet_ids:
-                    tweet_ids.add(tweet["id"])
-                    collection["tweets"].append(tweet)
-            print("Collected {} out of {} tweets".format(len(tweet_ids,collection_target)))
+            #update our newest tweet id and query
+            newest_id = result["meta"]["newest_id"]
+            collection_query  = {
+                #note: get every tweet tagged english. weird negated statement because API doesn't let you just ask for every tweet in recent
+                "query": "lang:en the -the",
+                #ensures we dont poll the same tweets
+                "since_id": newest_id,
+                "max_results": "10",
+                "tweet.fields": "author_id,created_at,in_reply_to_user_id,entities,public_metrics"
+            }
+            #store our new tweets
+            with open(collections_path, "a") as file:
+                for tweet in result["data"]:
+                    file.write(json.dumps(tweet))
+                    file.write("\n")
+                    tweet_ids.add(int(tweet["id"]))
+            print("Collected {} out of {} tweets".format(len(tweet_ids),collection_target))
     
-    with open(collections_path, "w") as file:
-        file.write(json.dumps(collection))
+    ids_ascending = [str(x) for x in sorted(tweet_ids)]
+    #now that we have our tweets, wait for the update rate to elapse before beginning update step
+    timeout = update_rate - (time.time() - update_start)
+    print("Waiting {} seconds for next update".format(str(timeout)))
+    time.sleep(timeout)
 
+    #begin update iteration.
+    #for this step we need the likes, rt, comment count of each tweet
+    #we also need to purge any tweets that are deleted in this time in accordance with the twitter API
+    deleted_ids = []
+    for u in range(1,update_iterations+1):
+        update_start = time.time()
+        to_update = deque(ids_ascending)
+        
+        #note, we can make 300 requests for 100 tweets each every 15 minutes. Since we are polling for
+        #less than 30_000 tweets, we dont need to worry about hitting the limit
+        while len(to_update) > 0:
+            batch = ",".join([to_update.popleft() for _ in range(0,min(100, len(to_update)))])
+            update_query = {
+                "ids":batch,
+                "tweet.fields":"public_metrics"
+            }
+            timestamp = time.time()
+            result = make_query("https://api.twitter.com/2/tweets", header, update_query)
 
-    print("Test done!")
+            #record updates
+            with open(updates_path, "a") as file:
+                for tweet in result["data"]:
+                    update = {
+                        "timestamp" : str(timestamp),
+                        "id"        : tweet["id"],
+                        "public_metrics" : tweet["public_metrics"]
+                    }
+                    file.write(update.dumps())
+                    file.write("\n")
+
+            #record and delete unavailable tweets
+            for removed in result["errors"]:
+                deleted_ids.append(removed["value"])
+                ids_ascending.remove(removed["value"])
+
+        print("Finished update {} of {}".format(u,update_iterations))
+        if(u < update_iterations):
+            #wait for next update
+            update_end = time.time()
+            timeout = update_rate - (update_end - update_start)
+            print("Waiting {} seconds for next update".format(str(timeout)))
+            time.sleep(timeout)
+
+        print(deleted_ids)
 
 
     
