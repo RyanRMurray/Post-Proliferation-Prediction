@@ -50,6 +50,7 @@ def main():
                     arxiv_graph.add_edge(a,b,weight=1)
     
     end = datetime.datetime.now()
+
     print("Generated graph in {} seconds".format((end-start).seconds))
     print("Printing graph with {} edges between {} nodes.".format(arxiv_graph.size(), len(arxiv_graph.nodes())))
     nx.draw(arxiv_graph)

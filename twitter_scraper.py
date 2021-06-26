@@ -7,7 +7,8 @@ import json
 import time
 import requests
 import zipfile
-
+import csv
+from datetime import datetime
 
 collections_path = Path("./Data/collection.json")
 updates_path = Path("./Data/updates.json")
@@ -30,7 +31,108 @@ def make_query(endpoint, header,query):
         raise Exception(result.status_code,result.text)
     return result.json()
 
-def main():
+def convert_to_epoch(t):
+    utc= datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%fZ")
+    return (utc - datetime(1970,1,1)).total_seconds()
+
+#get a number of pure tweets
+def get_tweets(target : int, outfile : str):
+    query = {
+        "query": "lang:en -is:retweet the -the",
+        "max_results": "100",
+        "tweet.fields": "author_id,created_at,in_reply_to_user_id,entities,public_metrics,attachments,context_annotations,reply_settings"
+    }
+    query_start = time.time()
+    newest_id = 0
+    collected = 0
+
+    with open(outfile, "w") as file:
+        file.write("[\n")
+
+        while collected < target:
+            try:
+                result = make_query(collection_endpoint, header, query)
+            except:
+                #wait for next round of queries
+                query_end = time.time()
+                print("Rate limit exceeded!")
+                elapsed  = query_end - query_start
+                timeout = 60*16 - elapsed
+                time.sleep(max(0,timeout))
+                query_start = time.time()
+            else:
+                #see if we got new tweets
+                if result["meta"]["result_count"] > 0:
+                    collected += int(result["meta"]["result_count"])
+
+                    for tweet in result["data"]:
+                        tweet["created_at"] = convert_to_epoch(tweet["created_at"])
+                        file.write(json.dumps(tweet))
+                        #add delimiter
+                        if collected < target or tweet is not result["data"][-1]:
+                            file.write(",\n")
+
+                #update query so we dont save the same tweets
+                query = {
+                    "query": "lang:en -is:retweet the -the",
+                    "max_results": "100",
+                    "since_id": newest_id,
+                    "tweet.fields": "author_id,created_at,in_reply_to_user_id,entities,public_metrics,attachments,context_annotations,reply_settings"
+                }
+                
+                print("Collected {} out of {} tweets".format(collected,target))
+
+                #slight time delay to allow for more tweets
+                time.sleep(10)
+        
+
+        file.write("\n]")
+
+#get update on tweets
+def updates_for(tweets : str, to_file : str):
+    fields = ["timestamp","id","likes","retweets","quotes"]
+
+    #get every id to update
+    with open(tweets, "r") as infile:
+        ids_buffer = deque([t["id"] for t in json.load(infile)])
+    
+    with open(to_file, "w") as outfile:
+        w = csv.DictWriter(outfile, fields)
+        w.writeheader()
+
+    while len(ids_buffer) > 0:
+        update_start = time.time()
+
+        batch = ",".join([ids_buffer.popleft() for _ in range(0,min(100,len(ids_buffer)))])
+        query = {
+            "ids" : batch,
+            "tweet.fields" : "public_metrics"
+        }
+        timestamp = time.time()
+        result = make_query("https://api.twitter.com/2/tweets", header, query)
+
+        with open(to_file, "a", newline="") as outfile:
+            writer = csv.DictWriter(outfile, fields,)
+            for tweet in result["data"]:
+                writer.writerow({
+                    "timestamp" : timestamp,
+                    "id"        : tweet["id"],
+                    "likes"     : tweet["public_metrics"]["like_count"],
+                    "retweets"  : tweet["public_metrics"]["retweet_count"],
+                    "quotes"    : tweet["public_metrics"]["quote_count"]
+                })
+        
+        if "errors" in result:
+            with open("./Data/to_delete.txt", "a") as td:
+                for removed in result["errors"]:
+                    td.write(removed["value"])
+                    td.write("\n")
+
+        print("Completed update!")
+
+
+
+def collection_1():
     tweet_ids = set()
 
     #check if collection file exists
@@ -115,8 +217,6 @@ def main():
         update_start = time.time()
         to_update = deque(ids_ascending)
         
-        #note, we can make 300 requests for 100 tweets each every 15 minutes. Since we are polling for
-        #less than 30_000 tweets, we dont need to worry about hitting the limit
         while len(to_update) > 0:
             batch = ",".join([to_update.popleft() for _ in range(0,min(100, len(to_update)))])
             update_query = {
@@ -171,7 +271,3 @@ def main():
         for i in deleted_ids:
             file.write(i)
             file.write("\n")
-
-
-    
-main()
