@@ -109,7 +109,16 @@ def updates_for(tweets : str, to_file : str):
             "tweet.fields" : "public_metrics"
         }
         timestamp = time.time()
-        result = make_query("https://api.twitter.com/2/tweets", header, query)
+        try:
+            result = make_query("https://api.twitter.com/2/tweets", header, query)
+        except:
+            print("Limit rate exceeded!")
+            elasped = time.time() - update_start
+            timeout = 60*16 - elasped
+            time.sleep(max(0,timeout))
+            update_start = time.time()
+            #redo request now that timeout has ended
+            result = make_query("https://api.twitter.com/2/tweets", header, query)
 
         with open(to_file, "a", newline="") as outfile:
             writer = csv.DictWriter(outfile, fields,)
