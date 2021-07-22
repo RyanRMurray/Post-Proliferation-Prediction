@@ -8,6 +8,8 @@ import time
 import requests
 import zipfile
 import csv
+import urllib
+from PIL import Image
 from datetime import datetime
 
 collections_path = Path("./Data/collection.json")
@@ -52,10 +54,11 @@ def get_tweets(target : int, outfile : str):
         while collected < target:
             try:
                 result = make_query(collection_endpoint, header, query)
-            except:
+            except Exception as e:
                 #wait for next round of queries
                 query_end = time.time()
                 print("Rate limit exceeded!")
+                print(e)
                 elapsed  = query_end - query_start
                 timeout = 60*16 - elapsed
                 time.sleep(max(0,timeout))
@@ -64,6 +67,7 @@ def get_tweets(target : int, outfile : str):
                 #see if we got new tweets
                 if result["meta"]["result_count"] > 0:
                     collected += int(result["meta"]["result_count"])
+                    newest_id = result["meta"]["newest_id"]
 
                     for tweet in result["data"]:
                         tweet["created_at"] = convert_to_epoch(tweet["created_at"])
@@ -137,7 +141,60 @@ def updates_for(tweets : str, to_file : str):
                     td.write(removed["value"])
                     td.write("\n")
 
-        print("Completed update!")
+    print("Completed update!")
+
+def retrieve_images(tweets : str, directory : str):
+    #get only tweets with media keys
+    with open(tweets, "r") as infile:
+        ids_buffer = deque([
+                t["id"]
+                for t in json.load(infile)
+                if ("attachments" in t and "media_keys" in t["attachments"])
+            ])
+    update_start = time.time()
+    while len(ids_buffer) > 0:
+        batch = ",".join([ids_buffer.popleft() for _ in range(0,min(100,len(ids_buffer)))])
+        query = {
+            "ids" : batch,
+            "expansions" : "attachments.media_keys",
+            "media.fields" : "type,url"
+        } 
+
+        try:
+            result = make_query("https://api.twitter.com/2/tweets", header, query)
+        except:
+            print("Limit rate exceeded!")
+            elasped = time.time() - update_start
+            timeout = 60*16 - elasped
+            time.sleep(max(0,timeout))
+            update_start = time.time()
+            #redo request now that timeout has ended
+            result = make_query("https://api.twitter.com/2/tweets", header, query)
+
+        #first, associate media keys with tweets
+        keys_to_ids = {}
+        for tweet in result["data"]:
+            if "attachments" in tweet:
+                for k in tweet["attachments"]["media_keys"]:
+                    keys_to_ids[k] = tweet["id"]
+        
+        #now we can retrieve images. Images are resized to 299x299 for resnet compatibility.
+        for media in result["includes"]["media"]:
+            if media["type"] == "photo":
+                #only get the first image a tweet contains
+                if not (os.path.isfile("./"+directory+"/"+keys_to_ids[media["media_key"]]+".jpg")):
+                    try:
+                        img = Image.open(requests.get(media["url"], stream=True).raw)
+                        resized = img.resize((299,299), Image.ANTIALIAS)
+                        if resized.mode in ("RGBA","P"):
+                            resized = resized.convert("RGB")
+                        resized.save("./"+directory+"/"+keys_to_ids[media["media_key"]]+".jpg")
+                    except:
+                        print("Couldn't retrieve image for {}".format(keys_to_ids[media["media_key"]]))
+        print("{} tweets remain in queue".format(len(ids_buffer)))
+        
+    print("Done!")
+
 
 
 
