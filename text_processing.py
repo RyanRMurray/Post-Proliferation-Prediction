@@ -2,6 +2,7 @@ import os
 import json
 from urllib.parse import urlparse
 import re
+from collections import defaultdict
 
 def preproc_text(tweet : json) -> str:
     text = tweet['text']
@@ -39,15 +40,43 @@ def preproc_text(tweet : json) -> str:
     return text.lower()
 
 
+def generate_normalised(paths : [str], output : str):
+    word_corpus = defaultdict(int)
+    file_counter = 1
+    file_num = len(paths)
+
+    with open('temp_corpus.json', 'w') as outfile:
+        outfile.write("[\n")
+        for path in paths:
+            counter = 0
+            with open(path, "r") as infile:
+                j = json.load(infile)
+            
+            tweet_num = len(j)
+            
+            for tweet in j:
+                processed_text = preproc_text(tweet)
+                outfile.write('{{"id": "{}", "text": {}}},\n'.format(tweet['id'], json.dumps(processed_text)))
+                for word in re.split("\s+", processed_text):
+                    word_corpus[word] += 1
+
+                counter += 1
+                print("First Pass: Normalised {}/{} tweets for file {}/{}".format(counter, tweet_num, file_counter, file_num), end='\r')
+                
+        outfile.write("]")
+    print()
+    print("First Pass: Complete")
+    print("{} unique words in corpus.".format(len(word_corpus.keys())))
+
+    #todo, delete words with <10 occurences, save final file
+    
+    
+
+
+
 def main():
     print("testing")
-    with open("./Data/200ktweets26062021.json", "r") as f:
-        j = json.load(f)
-        print("loaded")
-        for (n,tweet) in zip(range(100), j):
-            print("{}/100".format(n))
-            print(tweet['text'])
-            print("-->")
-            print(preproc_text(tweet))
+    generate_normalised(["./Data/200ktweets26062021.json"], "eggs")
+    print("complete")
 
 main()
