@@ -1,6 +1,7 @@
 # Project Specific
 .twitter_keys.yaml
 .vscode/
+temp_corpus.json
 
 # Byte-compiled / optimized / DLL file
 __pycache__/
@@ -134,4 +135,4 @@ dmypy.json
 
 # Archive/twitter data
 /Data/*
-
+/Processed/*
