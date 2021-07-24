@@ -2,6 +2,7 @@
 .twitter_keys.yaml
 .vscode/
 temp_corpus.json
+Data_backup.zip
 
 # Byte-compiled / optimized / DLL file
 __pycache__/
