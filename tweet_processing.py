@@ -4,6 +4,16 @@ from urllib.parse import urlparse
 import re
 from collections import defaultdict
 
+project_files = [
+    "1m_tweets_10_7_2021.json",
+    "1m_tweets_11_7_2021.json",
+    "1m_tweets_12_7_2021.json",
+    "1m_tweets_13_7_2021.json",
+    "1m_tweets_14_7_2021.json",
+    "1m_tweets_15_7_2021.json",
+    "1m_tweets_16_7_2021.json",
+]
+
 def preproc_text(tweet : json) -> str:
     text = tweet['text']
 
@@ -39,74 +49,71 @@ def preproc_text(tweet : json) -> str:
 
     return text.lower()
 
-
-def generate_normalised(paths : [str], output : str):
+def normalise_text(files : [str]):
     word_corpus = defaultdict(int)
     file_counter = 1
-    file_num = len(paths)
+    file_num = len(files)
 
-    with open('temp_corpus.json', 'w') as outfile:
-        outfile.write("[\n")
-        for path in paths:
-            counter = 0
-            with open(path, "r") as infile:
-                j = json.load(infile)
-            
-            tweet_num = len(j)
-            
+    inputs  = ['./Data/'     + f for f in files]
+    outputs = ['./Processed/'+ f for f in files]
+
+    for (infile,outfile) in zip(inputs,outputs):
+        counter = 0
+        with open(infile, "r") as infile:
+            j = json.load(infile)
+        
+        tweet_num = len(j)
+        
+        with open(outfile, "w") as outfile:
             for tweet in j:
                 processed_text = preproc_text(tweet)
-                outfile.write('{{"id": "{}", "text": {}}}'.format(tweet['id'], json.dumps(processed_text)))
+                tweet['text'] = processed_text
                 for word in re.split("\s+", processed_text):
                     word_corpus[word] += 1
 
                 counter += 1
-                if counter != tweet_num or file_counter != file_num:
-                    outfile.write(",")
-                outfile.write('\n')
                 print("First Pass: Normalised {}/{} tweets for file {}/{}".format(counter, tweet_num, file_counter, file_num), end='\r')
-                
-        outfile.write("]")
+            json.dump(j, outfile, separators=(',', ': '), indent=4, sort_keys=True)
+        file_counter += 1
+    
     print()
     print("First Pass: Complete")
     print("{} unique words in corpus.".format(len(word_corpus.keys())))
 
-    #todo, delete words with <10 occurences, save final file
-    counter = 0
+    
+    #delete words with <10 occurrences
+    file_counter = 1
 
-    with open('temp_corpus.json', 'r') as infile:
-            with open(output,'w') as outfile:
-                outfile.write("[\n")
-                j = json.load(infile)
-                tweet_num = len(j)
-                for text in j:
-                    text['text'] = ' '.join(
-                        map(
-                            lambda t : '<unknown>' if (word_corpus[t] <= 10) else t,
-                            text['text'].split(" ")
-                        )
+    for outfile in outputs:
+        counter = -0
+        with open(outfile, "r+") as outfile:
+            j = json.load(outfile)
+
+            tweet_num = len(j)
+
+            for tweet in j:
+                tweet['text'] = ' '.join(
+                    map(
+                        lambda t : '<unknown>' if (word_corpus[t] <= 10) else t,
+                        tweet['text'].split()
                     )
-                    outfile.write(json.dumps(text))
-                    
-                    counter += 1
-                    if counter != tweet_num:
-                        outfile.write(",")
-                    outfile.write('\n')
-                    print("Second Pass: Normalised {}/{} tweets".format(counter, tweet_num), end='\r')
+                )
 
-                outfile.write("]")
-    
+                counter += 1
+                print("Second Pass: Normalised {}/{} tweets for file {}/{}".format(counter, tweet_num, file_counter, file_num), end='\r')
+          
+            outfile.seek(0)
+            json.dump(j, outfile, separators=(',', ': '), indent=4, sort_keys=True)
+            outfile.truncate()
+        
+        file_counter += 1
+
     print()
-    print("Second Pass: Complete")
-    print('Deleting temp corpus')
-    os.remove('temp_corpus.json')
-    
-
-
+    print("Second Pass: Complete")    
 
 def main():
     print("testing")
-    generate_normalised(["./Data/200ktweets26062021.json"], "./Processed/test.json")
+    normalise_text(project_files)
     print("complete")
 
 main()
