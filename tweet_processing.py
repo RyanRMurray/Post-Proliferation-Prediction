@@ -1,17 +1,29 @@
 import os
 import json
+import csv
 from urllib.parse import urlparse
 import re
 from collections import defaultdict
 
-project_files = [
-    "1m_tweets_10_7_2021.json",
-    "1m_tweets_11_7_2021.json",
-    "1m_tweets_12_7_2021.json",
-    "1m_tweets_13_7_2021.json",
-    "1m_tweets_14_7_2021.json",
-    "1m_tweets_15_7_2021.json",
-    "1m_tweets_16_7_2021.json",
+#project default paramaters
+tweet_files = [
+    './Processed/1m_tweets_10_7_2021.json',
+    './Processed/1m_tweets_11_7_2021.json',
+    './Processed/1m_tweets_12_7_2021.json',
+    './Processed/1m_tweets_13_7_2021.json',
+    './Processed/1m_tweets_14_7_2021.json',
+    './Processed/1m_tweets_15_7_2021.json',
+    './Processed/1m_tweets_16_7_2021.json',
+]
+
+update_files = [
+    './Data/1m_tweets_10_7_2021_updates.csv',
+    './Data/1m_tweets_11_7_2021_updates.csv',
+    './Data/1m_tweets_12_7_2021_updates.csv',
+    './Data/1m_tweets_13_7_2021_updates.csv',
+    './Data/1m_tweets_14_7_2021_updates.csv',
+    './Data/1m_tweets_15_7_2021_updates.csv',
+    './Data/1m_tweets_16_7_2021_updates.csv',
 ]
 
 def preproc_text(tweet : json) -> str:
@@ -39,13 +51,13 @@ def preproc_text(tweet : json) -> str:
         text = text.replace(allcap, '<allcaps> ' + allcap.lower())
 
     #replace times
-    text = re.sub("[0-9]{1,2}:[0-9]{2}", '<time>', text)
+    text = re.sub(r"[0-9]{1,2}:[0-9]{2}", '<time>', text)
 
     #replace dates
-    text = re.sub("[0-9]{1,4}(-|\/)[0-9]{1,2}((-|\/)[0-9]{1,4})?", "<date>", text)
+    text = re.sub(r"[0-9]{1,4}(-|\/)[0-9]{1,2}((-|\/)[0-9]{1,4})?", "<date>", text)
 
     #replace numbers
-    text = re.sub("-?[0-9][0-9,\.]+", '<number>', text)
+    text = re.sub(r"-?[0-9][0-9,\.]+", '<number>', text)
 
     return text.lower()
 
@@ -68,7 +80,7 @@ def normalise_text(files : [str]):
             for tweet in j:
                 processed_text = preproc_text(tweet)
                 tweet['text'] = processed_text
-                for word in re.split("\s+", processed_text):
+                for word in re.split(r"\s+", processed_text):
                     word_corpus[word] += 1
 
                 counter += 1
@@ -111,9 +123,53 @@ def normalise_text(files : [str]):
     print()
     print("Second Pass: Complete")    
 
+def id_map(tweets : json):
+    mapped = {}
+    for t in tweets:
+        mapped[t['id']] = t
+
+    return mapped
+    
+
+def build_data_set(tweets : [str], updates : [str], destination : str):
+    #open update/files, save to file
+    file_num = len(tweets)
+    file_count = 0
+
+    with open(destination, 'w') as outfile:
+        outfile.write('[\n')
+
+        for (t,u) in zip(tweets, updates):
+            file_count += 1
+            print("Collecting data from file pair {}/{}".format(file_count,file_num))
+
+            with open(t, 'r') as infile_tweets, open(u, 'r') as infile_updates:
+                c_updates = csv.DictReader(infile_updates)
+                j_tweets = id_map(json.load(infile_tweets))
+
+                for update in c_updates:
+                    final_metrics = {
+                        'like_count'    : update['likes'],
+                        'quote_count'   : update['quotes'],
+                        'retweet_count' : update['retweets']
+                    }
+                    data = j_tweets[update['id']]
+
+                    data['initial_metrics'] = data['public_metrics']
+                    data['final_metrics']  = final_metrics
+
+                    data.pop('public_metrics', None)
+                    data.pop('entities', None)
+                    data.pop('in_reply_to_user_id', None)
+
+                    outfile.write(json.dumps(data))
+                    outfile.write(',\n')
+
+        outfile.write(']')
+    
+    print('Complete')
+
 def main():
-    print("testing")
-    normalise_text(project_files)
-    print("complete")
+    build_data_set(tweet_files,update_files, './Data Sets/1mtweets.json')
 
 main()

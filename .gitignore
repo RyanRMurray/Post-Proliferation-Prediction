@@ -137,3 +137,4 @@ dmypy.json
 # Archive/twitter data
 /Data/*
 /Processed/*
+/Data Sets/*
