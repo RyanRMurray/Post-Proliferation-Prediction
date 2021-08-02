@@ -1,12 +1,23 @@
 import os
 import json
 import csv
+from typing import List
 from urllib.parse import urlparse
 import re
 from collections import defaultdict
 
 #project default paramaters
 tweet_files = [
+    '1m_tweets_10_7_2021.json',
+    '1m_tweets_11_7_2021.json',
+    '1m_tweets_12_7_2021.json',
+    '1m_tweets_13_7_2021.json',
+    '1m_tweets_14_7_2021.json',
+    '1m_tweets_15_7_2021.json',
+    '1m_tweets_16_7_2021.json',
+]
+
+procced_tweets = [
     './Processed/1m_tweets_10_7_2021.json',
     './Processed/1m_tweets_11_7_2021.json',
     './Processed/1m_tweets_12_7_2021.json',
@@ -51,17 +62,17 @@ def preproc_text(tweet : json) -> str:
         text = text.replace(allcap, '<allcaps> ' + allcap.lower())
 
     #replace times
-    text = re.sub(r"[0-9]{1,2}:[0-9]{2}", '<time>', text)
+    text = re.sub(r'[0-9]{1,2}:[0-9]{2}', '<time>', text)
 
     #replace dates
-    text = re.sub(r"[0-9]{1,4}(-|\/)[0-9]{1,2}((-|\/)[0-9]{1,4})?", "<date>", text)
+    text = re.sub(r'[0-9]{1,4}(-|\/)[0-9]{1,2}((-|\/)[0-9]{1,4})?', '<date>', text)
 
     #replace numbers
-    text = re.sub(r"-?[0-9][0-9,\.]+", '<number>', text)
+    text = re.sub(r'-?[0-9][0-9,\.]+', '<number>', text)
 
     return text.lower()
 
-def normalise_text(files : [str]):
+def normalise_text(files : List[str]):
     word_corpus = defaultdict(int)
     file_counter = 1
     file_num = len(files)
@@ -71,26 +82,26 @@ def normalise_text(files : [str]):
 
     for (infile,outfile) in zip(inputs,outputs):
         counter = 0
-        with open(infile, "r") as infile:
+        with open(infile, 'r') as infile:
             j = json.load(infile)
         
         tweet_num = len(j)
         
-        with open(outfile, "w") as outfile:
+        with open(outfile, 'w') as outfile:
             for tweet in j:
                 processed_text = preproc_text(tweet)
                 tweet['text'] = processed_text
-                for word in re.split(r"\s+", processed_text):
+                for word in re.findall(r'\w+[!"#$%&\'()*+,\-./:;<=>?@[\]^_`{|}~]\w+|\<\w+\>|\w+|[!"#$%&\'()*+,\-./:;<=>?@[\]^_`{|}~]', processed_text):
                     word_corpus[word] += 1
 
                 counter += 1
-                print("First Pass: Normalised {}/{} tweets for file {}/{}".format(counter, tweet_num, file_counter, file_num), end='\r')
+                print('First Pass: Normalised {}/{} tweets for file {}/{}'.format(counter, tweet_num, file_counter, file_num), end='\r')
             json.dump(j, outfile, separators=(',', ': '), indent=4, sort_keys=True)
         file_counter += 1
     
     print()
-    print("First Pass: Complete")
-    print("{} unique words in corpus.".format(len(word_corpus.keys())))
+    print('First Pass: Complete')
+    print('{} unique words in corpus.'.format(len(word_corpus.keys())))
 
     
     #delete words with <10 occurrences
@@ -98,7 +109,7 @@ def normalise_text(files : [str]):
 
     for outfile in outputs:
         counter = -0
-        with open(outfile, "r+") as outfile:
+        with open(outfile, 'r+') as outfile:
             j = json.load(outfile)
 
             tweet_num = len(j)
@@ -112,7 +123,7 @@ def normalise_text(files : [str]):
                 )
 
                 counter += 1
-                print("Second Pass: Normalised {}/{} tweets for file {}/{}".format(counter, tweet_num, file_counter, file_num), end='\r')
+                print('Second Pass: Normalised {}/{} tweets for file {}/{}'.format(counter, tweet_num, file_counter, file_num), end='\r')
           
             outfile.seek(0)
             json.dump(j, outfile, separators=(',', ': '), indent=4, sort_keys=True)
@@ -121,7 +132,7 @@ def normalise_text(files : [str]):
         file_counter += 1
 
     print()
-    print("Second Pass: Complete")    
+    print('Second Pass: Complete')    
 
 def id_map(tweets : json):
     mapped = {}
@@ -131,7 +142,7 @@ def id_map(tweets : json):
     return mapped
     
 
-def build_data_set(tweets : [str], updates : [str], destination : str):
+def build_data_set(tweets : List[str], updates : List[str], destination : str):
     #open update/files, save to file
     file_num = len(tweets)
     file_count = 0
@@ -141,7 +152,7 @@ def build_data_set(tweets : [str], updates : [str], destination : str):
 
         for (t,u) in zip(tweets, updates):
             file_count += 1
-            print("Collecting data from file pair {}/{}".format(file_count,file_num))
+            print('Collecting data from file pair {}/{}'.format(file_count,file_num))
 
             with open(t, 'r') as infile_tweets, open(u, 'r') as infile_updates:
                 c_updates = csv.DictReader(infile_updates)
@@ -168,8 +179,3 @@ def build_data_set(tweets : [str], updates : [str], destination : str):
         outfile.write(']')
     
     print('Complete')
-
-def main():
-    build_data_set(tweet_files,update_files, './Data Sets/1mtweets.json')
-
-main()
