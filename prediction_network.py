@@ -1,5 +1,8 @@
 import json
 import cv2
+import re
+import math
+import itertools
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
@@ -14,12 +17,46 @@ from tensorflow.keras.layers import Dense, Flatten, Embedding, LSTM, GRU
 from tensorflow.keras.models import Sequential
 
 def word_embedding(data : json):
+    tweets = len(data)
     words = set()
     input_size = 0
 
-    
-    return
+    for tweet in data:
+        symbols = re.split(r'\s+', tweet['text'])
+        input_size = max(input_size, len(symbols))
+        words.update(symbols)
 
+    dims = math.ceil(len(words) ** (1/4))
+
+    print('{} unique symbols, input size is {}. Using {} dimensions.'.format(len(words), input_size, dims))
+
+    tokenizer = Tokenizer(len(words), filters='!"#$%&()*+,-/:;=?@[\\]^_`{|}~\t\n')
+    tokenizer.fit_on_texts([tweet['text'] for tweet in data])
+
+    counter = 0
+    for tweet in data:
+        tokens = np.array(
+            tokenizer.texts_to_sequences([tweet['text']])[0]
+        )
+        #we pad the left side like this because we're iterating on each json object
+        seq = np.zeros(input_size)
+        seq[-len(tokens):] = tokens
+        tweet['sequence'] = seq
+
+        counter += 1
+        print('Generated {}/{} sequences'.format(counter, tweets), end='\r')
+
+    print()
+    print("Generated Sequences")
+
+    return data
+
+j = json.load(open('./Data Sets/200ktweets.json', 'r'))
+
+for (_,x) in zip(range(10), word_embedding(j)):
+    print(x['text'])
+    print(x['sequence'])
+    print()
 
 
 '''
