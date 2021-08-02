@@ -14,7 +14,8 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.layers import Dense, Flatten, Embedding, LSTM, GRU
+from tensorflow.keras.layers import Dense, Flatten, Embedding, LSTM, GRU, ReLU, BatchNormalization, Lambda
+from tensorflow.keras.regularizers import L2
 from tensorflow.keras.models import Sequential
 
 from typing import Tuple
@@ -55,24 +56,39 @@ def tokenize_data(data : list) -> Tuple[list, int, int]:
 
     return (data, len(words), input_size)
 
+#adds layers as described in rt wars paper
+def pre_joint_embed_layers(inputs, units):
+    pre_joint = Dense(units)(inputs)
+    pre_joint = ReLU()(pre_joint)
+    pre_joint = Dense(units)(pre_joint)
+    pre_joint = BatchNormalization()(pre_joint)
+    pre_joint = Lambda(lambda x: tf.keras.backend.l2_normalize(x,axis=1))(pre_joint)
+    
+    return pre_joint
 
 def lstm_branch(word_num, input_size):
-    t_branch = Sequential()
+    lstm = Sequential()
     embedding = Embedding(word_num, 32, input_length=input_size, name='lstm_embedder')
-    t_branch.add(embedding)
-    t_branch.add(LSTM(32))
+    lstm.add(embedding)
+    lstm.add(LSTM(32))
 
+    t_branch = tf.keras.Model(inputs= lstm.input, outputs=pre_joint_embed_layers(lstm.output,32))
+
+    #t_branch.summary()
     print("Generated lstm branch")
-    t_branch.summary()
+    
     return t_branch
 
 def cnn_branch():
-    inceptionresnet = tf.keras.applications.InceptionResNetV2()
-    inception_output = inceptionresnet.layers[-2].output
-    i_branch = tf.keras.Model(inputs = inceptionresnet.input, outputs = inception_output)
+    inceptionresnet = tf.keras.applications.InceptionResNetV2(include_top=False)
+    
+    for layer in inceptionresnet.layers:
+        layer.trainable = False
 
+    i_branch = tf.keras.Model(inputs=inceptionresnet.input, outputs=pre_joint_embed_layers(inceptionresnet.output,1536))
+    
+    #i_branch.summary()
     print("Generated cnn branch")
-
     return i_branch
 
 def main():
@@ -95,6 +111,8 @@ def main():
     #generate branches
     i_branch = cnn_branch()
     t_branch = lstm_branch(word_count, text_input_length)   
+
+    
 
 main()
 
