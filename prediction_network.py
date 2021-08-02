@@ -14,9 +14,10 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.layers import Dense, Flatten, Embedding, LSTM, GRU, ReLU, BatchNormalization, Lambda
+from tensorflow.keras.layers import Dense, Flatten, Embedding, LSTM, ReLU, BatchNormalization, Lambda, Concatenate, Reshape
 from tensorflow.keras.regularizers import L2
 from tensorflow.keras.models import Sequential
+from keras.utils.vis_utils import plot_model
 
 from typing import Tuple
 
@@ -57,10 +58,10 @@ def tokenize_data(data : list) -> Tuple[list, int, int]:
     return (data, len(words), input_size)
 
 #adds layers as described in rt wars paper
-def pre_joint_embed_layers(inputs, units):
-    pre_joint = Dense(units)(inputs)
+def pre_joint_embed_layers(inputs, fc1,fc2):
+    pre_joint = Dense(fc1)(inputs)
     pre_joint = ReLU()(pre_joint)
-    pre_joint = Dense(units)(pre_joint)
+    pre_joint = Dense(fc2)(pre_joint)
     pre_joint = BatchNormalization()(pre_joint)
     pre_joint = Lambda(lambda x: tf.keras.backend.l2_normalize(x,axis=1))(pre_joint)
     
@@ -68,11 +69,11 @@ def pre_joint_embed_layers(inputs, units):
 
 def lstm_branch(word_num, input_size):
     lstm = Sequential()
-    embedding = Embedding(word_num, 32, input_length=input_size, name='lstm_embedder')
+    embedding = Embedding(word_num, 256 , input_length=input_size, name='lstm_embedder')
     lstm.add(embedding)
-    lstm.add(LSTM(32))
+    lstm.add(LSTM(256))
 
-    t_branch = tf.keras.Model(inputs= lstm.input, outputs=pre_joint_embed_layers(lstm.output,32))
+    t_branch = tf.keras.Model(inputs= lstm.input, outputs=pre_joint_embed_layers(lstm.output,512,256))
 
     #t_branch.summary()
     print("Generated lstm branch")
@@ -85,7 +86,12 @@ def cnn_branch():
     for layer in inceptionresnet.layers:
         layer.trainable = False
 
-    i_branch = tf.keras.Model(inputs=inceptionresnet.input, outputs=pre_joint_embed_layers(inceptionresnet.output,1536))
+    pre_joint = pre_joint_embed_layers(inceptionresnet.output,768,256)
+
+    #reshape
+    reshaped = Reshape((256,))(pre_joint)
+
+    i_branch = tf.keras.Model(inputs=inceptionresnet.input, outputs=reshaped)
     
     #i_branch.summary()
     print("Generated cnn branch")
@@ -107,21 +113,22 @@ def main():
 
     #generate sequences
     (data, word_count, text_input_length) = tokenize_data(data)
-
+    
     #generate branches
     i_branch = cnn_branch()
-    t_branch = lstm_branch(word_count, text_input_length)   
-
+    t_branch = lstm_branch(word_count, text_input_length)
+    #joint embedding and convolution
+    joint = Concatenate()([i_branch.output, t_branch.output])
+    joint = Dense(256)(joint)
+    joint = Dense(128)(joint)
     
+    intermediate_model = tf.keras.Model(inputs=[i_branch.input, t_branch.input], outputs=joint)
+    #todo: user details, save model and tokenizer
 
 main()
 
 '''
-inceptionresnet = tf.keras.applications.InceptionResNetV2()
-inception_output = inceptionresnet.layers[-2].output
-i_branch = tf.keras.Model(inputs = inceptionresnet.input, outputs = inception_output)
-
-i = cv2.imread("./Data/200ktweets_Images/1408753241932845057.jpg")
+i = cv2.imread("./Data/200ktweets_Images/x.jpg")
 i = tf.expand_dims(i, axis=0)
 
 print(i_branch.predict(i))
