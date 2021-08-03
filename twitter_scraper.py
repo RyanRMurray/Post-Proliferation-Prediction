@@ -1,4 +1,4 @@
-from typing import Collection
+from typing import Collection, List
 from searchtweets import ResultStream, load_credentials
 from pathlib import Path
 from collections import deque
@@ -195,8 +195,66 @@ def retrieve_images(tweets : str, directory : str):
         
     print("Done!")
 
+#collect author details and add to records. Duplicated data, but simplifies input process later.
+#900 requests per 15 min 
+def author_details(directories : List[str]):
+    file_count = len(directories)
+    file_num = 0
 
+    query_start = time.time()
+    for d in directories:
+        file_num += 1
+        with open(d, 'r+') as outfile:
+            data = json.load(outfile)
+            author_data = {}
+            to_request = set()
 
+            #get all unique authors
+            for tweet in data:
+                to_request.add(tweet['author_id'])
+
+            #generate request queue
+            author_count = len(to_request)
+            author_num = 0
+            queue = deque(to_request)
+
+            #record data
+            while len(queue) >  0:
+                batch = ",".join([queue.popleft() for _ in range(0,min(100,len(queue)))])
+                query = {
+                    "ids" : batch,
+                    "user.fields" : "created_at,public_metrics,verified"
+                }
+                try:
+                    result = make_query('https://api.twitter.com/2/users', header, query)
+                except:
+                    print("Limit rate exceeded!")
+                    elasped = time.time() - query_start
+                    timeout = 60*16 - elasped
+                    time.sleep(max(0,timeout))
+                    query_start = time.time()
+                    #redo request now that timeout has ended
+                    result = make_query('https://api.twitter.com/2/users', header, query)
+            
+                author_num += len(result['data'])
+                for details in result['data']:
+                    author_data[details['id']] = details
+
+                print("Retrieved data for {}/{} authors in file {}/{}".format(author_num, author_count, file_num, file_count), end='\r')
+            
+            print()
+            print("Collected Author Data. Deleting authorless tweets and saving.")
+            #delete tweets from deleted accounts
+            data = [tweet for tweet in data if tweet['author_id'] in author_data]
+
+            #add author data
+            for tweet in data:
+                tweet['author_data'] = author_data[tweet['author_id']]
+            
+            outfile.seek(0)
+            json.dump(data, outfile, separators=(',', ': '), indent=4, sort_keys=True)
+            outfile.truncate()
+    print("Author collection complete!")
 
 def collection_1():
     tweet_ids = set()
