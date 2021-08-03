@@ -5,6 +5,8 @@ import math
 import itertools
 import sys
 import os
+
+from tensorflow.python.keras.layers.recurrent import SimpleRNN
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
 import numpy as np
@@ -14,7 +16,7 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.layers import Dense, Flatten, Embedding, LSTM, ReLU, BatchNormalization, Lambda, Concatenate, Reshape
+from tensorflow.keras.layers import Input, Dense, Flatten, Embedding, LSTM, ReLU, BatchNormalization, Lambda, Concatenate, Reshape, concatenate, SimpleRNN, TimeDistributed
 from tensorflow.keras.regularizers import L2
 from tensorflow.keras.models import Sequential
 from keras.utils.vis_utils import plot_model
@@ -97,6 +99,58 @@ def cnn_branch():
     print("Generated cnn branch")
     return i_branch
 
+def detail_input():
+    #details:
+    #   day-of-week of post,
+    #   time-of-day of post,
+    #   author account age,
+    #   author followers count,
+    #   author following count,
+    #   author tweet count,
+    #   author in list count,
+    #   author verified status
+    calc_detail_vector_size = lambda x : 2 + ((2**x)*x) + x - (2**(x+1))
+    input_size = calc_detail_vector_size(8)
+
+    d_branch = Input(shape=(input_size,))
+
+    print("Generated details branch")
+    return d_branch
+
+
+
+def build_model(data_dir : str):
+    data = json.load(open(data_dir, 'r'))
+
+    #generate sequences
+    (data, word_count, text_input_length) = tokenize_data(data)
+    
+    #generate branches
+    i_branch = cnn_branch()
+    t_branch = lstm_branch(word_count, text_input_length)
+    d_branch = detail_input()
+    #joint embedding and convolution
+    joint = concatenate([i_branch.output, t_branch.output])
+    joint = Dense(256)(joint)
+    joint = Dense(128)(joint)
+    
+    #add details input
+    joint = concatenate([joint, d_branch])
+    model = Dense(128)(joint)
+    
+    rnn_in = Input(shape=(None,1))
+    rnn = SimpleRNN(128, return_sequences=True, return_state=True)
+    dist = TimeDistributed(Dense(1, activation='relu'))
+
+
+    model, _ = rnn(rnn_in, initial_state=model)
+    model = dist(model)
+
+    final = tf.keras.Model(inputs=[i_branch.input, t_branch.input, d_branch, rnn_in], outputs=model)
+    print("Generated model")
+    return final
+    #todo: joint embedding constraint function, save model and tokenizer
+
 def main():
     #check input then load
     if len(sys.argv) != 2:
@@ -109,21 +163,9 @@ def main():
         print("Please enter a path to a valid json file")
         return
 
-    data = json.load(open(data_dir, 'r'))
-
-    #generate sequences
-    (data, word_count, text_input_length) = tokenize_data(data)
+    model = build_model(data_dir)
     
-    #generate branches
-    i_branch = cnn_branch()
-    t_branch = lstm_branch(word_count, text_input_length)
-    #joint embedding and convolution
-    joint = Concatenate()([i_branch.output, t_branch.output])
-    joint = Dense(256)(joint)
-    joint = Dense(128)(joint)
-    
-    intermediate_model = tf.keras.Model(inputs=[i_branch.input, t_branch.input], outputs=joint)
-    #todo: user details, save model and tokenizer
+    plot_model(model, to_file='model_plot.png', show_shapes=True)
 
 main()
 
