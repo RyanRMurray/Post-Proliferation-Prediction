@@ -4,11 +4,16 @@ import re
 import math
 import itertools
 import sys
-import os
 
-from tensorflow.python.keras.layers.recurrent import SimpleRNN
+import os
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
+import argparse
+parser = argparse.ArgumentParser(description='Generate and train a model to predict success of Twitter posts')
+parser.add_argument('dataset', metavar='dataset', type=str, help='Path to the training data set')
+parser.add_argument('model', metavar='model', type=str, nargs='?', help='Path to a pre-generated model (optional)', default=None)
+
+from tensorflow.python.keras.layers.recurrent import SimpleRNN
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -152,18 +157,24 @@ def build_model(data_dir : str):
     #todo: joint embedding constraint function, save model and tokenizer
 
 def main():
-    #check input then load
-    if len(sys.argv) != 2:
-        print("Run using the following command:\n\tpython3 prediction_network.py <data set path>")
-        return
-    
-    data_dir = sys.argv[1]
+    args = vars(parser.parse_args())
 
-    if data_dir[-5:] != '.json' or not os.path.isfile(data_dir):
+    if args['dataset'][-5:] != '.json' or not os.path.isfile(args['dataset']):
         print("Please enter a path to a valid json file")
         return
 
-    model = build_model(data_dir)
+    #load model, or create one if no directory supplied
+    if args['model'] is None:
+        #create and save model
+        model : tf.keras.Model = build_model(args['dataset']) 
+        print('Enter a name for this model: ')
+        name = input()
+        model._name = name
+        model.save('./Models/{}'.format(name))
+        print('Saved model to ./Models{}'.format(name))
+    else:
+        print('Loading model')
+        model = tf.keras.models.load_model(args['model'])
     
     plot_model(model, to_file='model_plot.png', show_shapes=True)
 
