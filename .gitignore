@@ -139,3 +139,4 @@ dmypy.json
 /Processed/*
 /Data Sets/*
 /Models/*
+/Tokenizers/*

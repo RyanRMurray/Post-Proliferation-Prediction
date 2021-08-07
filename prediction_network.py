@@ -4,6 +4,7 @@ import re
 import math
 import itertools
 import sys
+import pickle
 from datetime import datetime
 from PIL import Image
 
@@ -16,6 +17,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Generate and train a model to predict success of Twitter posts')
 parser.add_argument('dataset', metavar='dataset', type=str, help='Path to the training data set')
 parser.add_argument('model', metavar='model', type=str, nargs='?', help='Path to a pre-generated model (optional)', default=None)
+parser.add_argument('tokenizer', metavar='tokenizer', type=str, nargs='?', help='Path to a tokenizer with associated metrics (optional)', default=None)
 
 from tensorflow.python.keras.layers.recurrent import SimpleRNN
 import numpy as np
@@ -216,6 +218,7 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
     )
 
 def main():
+    tokenized = False
     args = vars(parser.parse_args())
     
     if args['dataset'][-5:] != '.json' or not os.path.isfile(args['dataset']):
@@ -223,19 +226,27 @@ def main():
         return
 
     #get tokenized data and tokenizer.
-    (data, word_count, text_input_length, dims, tokenizer) = tokenize_data(json.load(open(args['dataset'], 'r')))
+    if args['tokenizer'] is None:
+        (data, word_count, text_input_length, dims, tokenizer) = tokenize_data(json.load(open(args['dataset'], 'r')))
+        to_pickle = (tokenizer, word_count, text_input_length, dims)
+        print('Enter a name for this tokenizer: ')
+        name = input()
+        with open('./Tokenizers/{}.pickle'.format(name), 'wb') as f:
+            pickle.dump(to_pickle, f)
+        tokenized = True
+    else:
+        with open(args['tokenizer'], 'rb') as f:
+            (tokenizer, word_count,text_input_length,dims) = pickle.load(f)
 
     #load model, or create one if no directory supplied
     if args['model'] is None:
         #create and save model
         model : tf.keras.Model = build_model(data, word_count, text_input_length, dims) 
-        '''
         print('Enter a name for this model: ')
         name = input()
         model._name = name
         model.save('./Models/{}'.format(name))
         print('Saved model to ./Models{}'.format(name))
-        '''
     else:
         print('Loading model')
         model : tf.keras.Model = tf.keras.models.load_model(args['model'])
@@ -248,9 +259,6 @@ def main():
     ((i,t,u),tr) = generate_training_data(data, '.', text_input_length, tokenizer)
 
     model.compile()
-
-    for x in [i,t,u]:
-        print(len(x[0]))
     
     print(model.predict([i,t,u,np.array([0])]))
 
