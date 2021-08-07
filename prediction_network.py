@@ -41,7 +41,7 @@ from typing import Tuple
 #   author tweet count,
 #   author in list count,
 #   author verified status
-calc_detail_vector_size = lambda x : 2 + ((2**x)*x) + x - (2**(x+1))
+calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
 
 #create token sequences for our inputs, and get info for generating the lstm branch
@@ -78,7 +78,7 @@ def tokenize_data(data : list) -> Tuple[list, int, int, Tokenizer]:
     print()
     print("Generated Sequences")
 
-    return (data, len(words), input_size, tokenizer)
+    return (data, len(words), input_size, dims, tokenizer)
 
 #adds layers as described in rt wars paper
 def pre_joint_embed_layers(inputs, fc1,fc2):
@@ -90,9 +90,9 @@ def pre_joint_embed_layers(inputs, fc1,fc2):
     
     return pre_joint
 
-def lstm_branch(word_num, text_input):
-    t_branch = Embedding(word_num, 256)(text_input)
-    t_branch = LSTM(256, input_shape=(None, None,text_input), dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
+def lstm_branch(word_num, text_input, text_dimensions):
+    t_branch = Embedding(word_num, text_dimensions)(text_input)
+    t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
     t_branch = pre_joint_embed_layers(t_branch,512,256)
 
     #t_branch.summary()
@@ -115,12 +115,12 @@ def cnn_branch():
     print("Generated cnn branch")
     return (i_branch, inceptionresnet.input)
 
-def build_model(data : str, word_count, text_input_length):
+def build_model(data : str, word_count, text_input_length, text_dimensions):
     text_input = Input(shape=(text_input_length,))
 
     #generate branches
     (i_branch, image_input) = cnn_branch()
-    t_branch = lstm_branch(word_count, text_input)
+    t_branch = lstm_branch(word_count, text_input, text_dimensions)
     d_branch = Input(shape=(DETAIL_FEATURES,))
     #joint embedding and convolution
     joint = concatenate([i_branch.output, t_branch])
@@ -147,7 +147,7 @@ def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
     #input is (([image],[text],[user data]), result)
 
     #check for image, else produce blank image
-    image = np.zeros((1,299,299,3))
+    image = np.zeros((299,299,3))
     path = '{}/{}.jpg'.format(image_directory, tweet['id'])
     if os.path.isfile(path):
         image = np.asarray(Image.open(path))
@@ -187,12 +187,33 @@ def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
         for y in range(x+1, len(user_data)):
             products.append(user_data[x] * user_data[y])
 
-    user_features = np.array(user_data+products)
+    user_features = np.array(user_data+products, dtype='float32')
 
     #get ground truth
     truth = int(tweet['final_metrics']['retweet_count'])
 
-    return ((image, text, user_features, np.array([0])), truth)
+    return ((image, text, user_features), truth)
+
+def generate_training_data(data, image_directory,text_input_size,tokenizer=None):
+    i_data, t_data, u_data, truth = [], [], [], []
+
+    for tweet in data:
+        ((i,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size,tokenizer)
+        i_data.append(i)
+        t_data.append(t)
+        u_data.append(u)
+        truth.append(tr)
+
+    
+
+    return (
+        (
+            np.array(i_data),
+            np.array(t_data),
+            np.array(u_data)
+        ),
+        np.array(truth).astype('float32')
+    )
 
 def main():
     args = vars(parser.parse_args())
@@ -202,35 +223,35 @@ def main():
         return
 
     #get tokenized data and tokenizer.
-    (data, word_count, text_input_length, tokenizer) = tokenize_data(json.load(open(args['dataset'], 'r')))
+    (data, word_count, text_input_length, dims, tokenizer) = tokenize_data(json.load(open(args['dataset'], 'r')))
 
     #load model, or create one if no directory supplied
     if args['model'] is None:
         #create and save model
-        model : tf.keras.Model = build_model(data, word_count, text_input_length) 
+        model : tf.keras.Model = build_model(data, word_count, text_input_length, dims) 
+        '''
         print('Enter a name for this model: ')
         name = input()
         model._name = name
         model.save('./Models/{}'.format(name))
         print('Saved model to ./Models{}'.format(name))
+        '''
     else:
         print('Loading model')
         model : tf.keras.Model = tf.keras.models.load_model(args['model'])
         print('Model loaded')
     
     plot_model(model, to_file='model_plot.png', show_shapes=True)
-    data = json.load(open('./Data Sets/test.json', 'r'))
-    x = tweet_to_training_pair(data[0], '.', text_input_length, tokenizer=tokenizer)
 
-    for z in x[0]:
-        print(type(z))
-    model(x[0])
+    #some testing code + example singular input
+    data = json.load(open('./Data Sets/test.json', 'r'))
+    ((i,t,u),tr) = generate_training_data(data, '.', text_input_length, tokenizer)
+
+    model.compile()
+
+    for x in [i,t,u]:
+        print(len(x[0]))
+    
+    print(model.predict([i,t,u,np.array([0])]))
 
 main()
-
-'''
-i = cv2.imread("./Data/200ktweets_Images/x.jpg")
-i = tf.expand_dims(i, axis=0)
-
-print(i_branch.predict(i))
-'''
