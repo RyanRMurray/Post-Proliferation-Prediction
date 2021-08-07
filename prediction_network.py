@@ -92,7 +92,7 @@ def pre_joint_embed_layers(inputs, fc1,fc2):
 
 def lstm_branch(word_num, text_input):
     t_branch = Embedding(word_num, 256)(text_input)
-    t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
+    t_branch = LSTM(256, input_shape=(None, None,text_input), dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
     t_branch = pre_joint_embed_layers(t_branch,512,256)
 
     #t_branch.summary()
