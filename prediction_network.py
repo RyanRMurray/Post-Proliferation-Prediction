@@ -16,13 +16,14 @@ os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 import argparse
 parser = argparse.ArgumentParser(description='Generate and train a model to predict success of Twitter posts')
 parser.add_argument('dataset', metavar='dataset', type=str, help='Path to the training data set')
-parser.add_argument('model', metavar='model', type=str, nargs='?', help='Path to a pre-generated model (optional)', default=None)
 parser.add_argument('tokenizer', metavar='tokenizer', type=str, nargs='?', help='Path to a tokenizer with associated metrics (optional)', default=None)
+parser.add_argument('model', metavar='model', type=str, nargs='?', help='Path to a pre-generated model (optional)', default=None)
 
 from tensorflow.python.keras.layers.recurrent import SimpleRNN
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
+import keras.utils.np_utils
 
 from tensorflow.keras import layers
 from tensorflow.keras.preprocessing.text import Tokenizer
@@ -45,6 +46,7 @@ from typing import Tuple
 #   author verified status
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
+CATEGORIES      = 9
 
 #create token sequences for our inputs, and get info for generating the lstm branch
 def tokenize_data(data : list) -> Tuple[list, int, int, Tokenizer]:
@@ -66,13 +68,10 @@ def tokenize_data(data : list) -> Tuple[list, int, int, Tokenizer]:
 
     counter = 0
     for tweet in data:
-        tokens = np.array(
-            tokenizer.texts_to_sequences([tweet['text']])[0]
-        )
+        tokens = tokenizer.texts_to_sequences([tweet['text']])[0]
+        tokens = ([0] * (input_size - len(tokens))) + tokens
         #we pad the left side like this because we're iterating on each json object
-        seq = np.zeros(input_size)
-        seq[-len(tokens):] = tokens
-        tweet['sequence'] = seq
+        tweet['sequence'] = tokens
 
         counter += 1
         print('Generated {}/{} sequences'.format(counter, tweets), end='\r')
@@ -108,6 +107,9 @@ def cnn_branch():
     for layer in inceptionresnet.layers:
         layer.trainable = False
 
+    #remove final softmax layer
+    inceptionresnet.layers.pop()
+
     pre_joint = pre_joint_embed_layers(inceptionresnet.output,768,256)
 
     i_branch = Flatten()(pre_joint)
@@ -132,15 +134,12 @@ def build_model(data : str, word_count, text_input_length, text_dimensions):
     #add details input
     joint = concatenate([joint, d_branch])
     model = Dense(128, kernel_regularizer=regularizers.l2(0.05))(joint)
+    model = Dense(64, activation='relu')(model)
     
-    rnn_in = Input(shape=(None,1))
-    rnn = SimpleRNN(128, kernel_regularizer=regularizers.l2(0.05), return_sequences=True, return_state=True)
-    dist = TimeDistributed(Dense(1, activation='relu'))
+    #output layer
+    model = Dense(CATEGORIES, activation='softmax')(model)
 
-    model, _ = rnn(rnn_in, initial_state=model)
-    model = dist(model)
-
-    final = tf.keras.Model(inputs = [image_input, text_input, d_branch, rnn_in], outputs=model)
+    final = tf.keras.Model(inputs = [image_input, text_input, d_branch], outputs=model)
     print("Generated model")
     return final
 
@@ -191,10 +190,13 @@ def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
 
     user_features = np.array(user_data+products, dtype='float32')
 
-    #get ground truth
-    truth = int(tweet['final_metrics']['retweet_count'])
+    #get ground truth for one-hot encoding
+    #one class for 0, 1 class for magnitude 1, ect.
+    #as of writing, no tweet has recieved over 10m retweets, so we'll stick with 9 categories for now
+    rts = int(tweet['final_metrics']['retweet_count'])
+    mag = 0 if rts == 0 else int(math.log10(rts))+1
 
-    return ((image, text, user_features), truth)
+    return ((image, text, user_features), mag)
 
 def generate_training_data(data, image_directory,text_input_size,tokenizer=None):
     i_data, t_data, u_data, truth = [], [], [], []
@@ -206,41 +208,54 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
         u_data.append(u)
         truth.append(tr)
 
-    
-
     return (
         (
             np.array(i_data),
             np.array(t_data),
             np.array(u_data)
         ),
-        np.array(truth).astype('float32')
+        keras.utils.np_utils.to_categorical(truth, CATEGORIES)
     )
 
 def main():
-    tokenized = False
     args = vars(parser.parse_args())
     
     if args['dataset'][-5:] != '.json' or not os.path.isfile(args['dataset']):
         print("Please enter a path to a valid json file")
         return
+    else:
+        print('Loading data set')
+        with open(args['dataset'],'r') as f:
+            data = json.load(f)
+            print('Loaded file.')
 
     #get tokenized data and tokenizer.
     if args['tokenizer'] is None:
-        (data, word_count, text_input_length, dims, tokenizer) = tokenize_data(json.load(open(args['dataset'], 'r')))
+        print('Creating Tokenizer...')
+        (data, word_count, text_input_length, dims, tokenizer) = tokenize_data(data)
         to_pickle = (tokenizer, word_count, text_input_length, dims)
         print('Enter a name for this tokenizer: ')
         name = input()
         with open('./Tokenizers/{}.pickle'.format(name), 'wb') as f:
             pickle.dump(to_pickle, f)
-        tokenized = True
+
+        print('Saving tokenized data...')
+        with open(args['dataset'], 'w') as f:
+            json.dump(data,f, separators=(',',':'), indent=4, sort_keys=True)
+        print('Saved.')
     else:
+        print('Loading Tokenizer from file.')
         with open(args['tokenizer'], 'rb') as f:
             (tokenizer, word_count,text_input_length,dims) = pickle.load(f)
+    
+    print('Loaded. Converting sequences to numpy arrays')
+    for tweet in data:
+        tweet['sequence'] = np.array(tweet['sequence'])
 
     #load model, or create one if no directory supplied
     if args['model'] is None:
         #create and save model
+        print('Creating model from input.')
         model : tf.keras.Model = build_model(data, word_count, text_input_length, dims) 
         print('Enter a name for this model: ')
         name = input()
@@ -260,6 +275,6 @@ def main():
 
     model.compile()
     
-    print(model.predict([i,t,u,np.array([0])]))
+    print(model.predict([i,t,u]))
 
 main()
