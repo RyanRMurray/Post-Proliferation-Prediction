@@ -108,9 +108,7 @@ def cnn_branch():
         layer.trainable = False
 
     #remove final softmax layer
-    inceptionresnet.layers.pop()
-
-    pre_joint = pre_joint_embed_layers(inceptionresnet.output,768,256)
+    pre_joint = pre_joint_embed_layers(inceptionresnet.layers[-2].output,768,256)
 
     i_branch = Flatten()(pre_joint)
 
