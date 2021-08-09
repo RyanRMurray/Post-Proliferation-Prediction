@@ -96,7 +96,7 @@ def normalise_text(files : List[str]):
 
                 counter += 1
                 print('First Pass: Normalised {}/{} tweets for file {}/{}'.format(counter, tweet_num, file_counter, file_num), end='\r')
-            json.dump(j, outfile, separators=(',', ': '), indent=4, sort_keys=True)
+            json.dump(j, outfile)
         file_counter += 1
     
     print()
@@ -126,7 +126,7 @@ def normalise_text(files : List[str]):
                 print('Second Pass: Normalised {}/{} tweets for file {}/{}'.format(counter, tweet_num, file_counter, file_num), end='\r')
           
             outfile.seek(0)
-            json.dump(j, outfile, separators=(',', ': '), indent=4, sort_keys=True)
+            json.dump(j, outfile)
             outfile.truncate()
         
         file_counter += 1

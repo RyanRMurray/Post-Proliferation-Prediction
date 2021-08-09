@@ -239,7 +239,7 @@ def main():
 
         print('Saving tokenized data...')
         with open(args['dataset'], 'w') as f:
-            json.dump(data,f, separators=(',',':'), indent=4, sort_keys=True)
+            json.dump(data,f)
         print('Saved.')
     else:
         print('Loading Tokenizer from file.')

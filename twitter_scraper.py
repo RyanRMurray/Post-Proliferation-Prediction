@@ -252,7 +252,7 @@ def author_details(directories : List[str]):
                 tweet['author_data'] = author_data[tweet['author_id']]
             
             outfile.seek(0)
-            json.dump(data, outfile, separators=(',', ': '), indent=4, sort_keys=True)
+            json.dump(data, outfile)
             outfile.truncate()
     print("Author collection complete!")
 
