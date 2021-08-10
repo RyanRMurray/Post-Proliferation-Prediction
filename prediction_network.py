@@ -7,7 +7,9 @@ import sys
 import pickle
 from datetime import datetime
 from PIL import Image
-
+import gc
+import matplotlib.pyplot as plt
+from nltk.tokenize import TweetTokenizer
 import os
 
 from tensorflow.keras import regularizers
@@ -34,7 +36,7 @@ from tensorflow.keras.regularizers import L2
 from tensorflow.keras.models import Sequential
 from keras.utils.vis_utils import plot_model
 
-from typing import Tuple
+from typing import Tuple, List
 
 #details:
 #   day-of-week of post,
@@ -48,16 +50,11 @@ from typing import Tuple
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
 CATEGORIES      = 9
-LSTM_GENERATIONS = 10_000
+LSTM_GENERATIONS = 100
+DEFAULT_IMAGE = np.zeros((150,150,3))
 
 class TrainingData():
     def __init__(self, i_data, t_data, u_data, truth):
-        #shuffle everything in unison
-        p = np.random.permutation(len(i_data))
-        i_data = np.array(i_data)[p]
-        t_data = np.array(i_data)[p]
-        u_data = np.array(i_data)[p]
-        truth  = keras.utils.np_utils.to_categorical(truth, CATEGORIES)[p]
 
         #split training/validation
         s = int(len(i_data)*0.8)
@@ -65,6 +62,7 @@ class TrainingData():
         (self.t_train,     self.t_valid)     = np.split(t_data, [s])
         (self.u_train,     self.u_valid)     = np.split(u_data, [s])
         (self.truth_train, self.truth_valid) = np.split(truth, [s])
+
     
     def x_train(self):
         return [self.i_train, self.t_train, self.u_train]
@@ -78,6 +76,31 @@ class TrainingData():
     def y_valid(self):
         return self.truth_valid
 
+#create a tokenizer
+def create_tokenizer(data):
+    tweets = len(data)
+    words = set()
+    input_size = 0
+    splitter = TweetTokenizer()
+
+    data = [splitter.tokenize(tweet) for tweet in data]
+
+    for tweet in data:
+        input_size = max(input_size, len(tweet))
+        words.update(tweet)
+    
+    dims = math.ceil(len(words) ** (1/4))
+
+    print('{} unique symbols, input size is {}. Using {} dimensions.'.format(len(words), input_size, dims))
+
+    tokenizer = Tokenizer(len(words))
+    tokenizer.fit_on_texts(data)
+
+    to_pickle = (tokenizer, len(words), input_size, dims)
+    print('Enter a name for this tokenizer: ')
+    name = input()
+    with open('./Tokenizers/{}.pickle'.format(name), 'wb') as f:
+        pickle.dump(to_pickle, f)
 
 #create token sequences for our inputs, and get info for generating the lstm branch
 def tokenize_data(data : list) -> Tuple[list, int, int, Tokenizer]:
@@ -114,8 +137,7 @@ def tokenize_data(data : list) -> Tuple[list, int, int, Tokenizer]:
 
 #adds layers as described in rt wars paper
 def pre_joint_embed_layers(inputs, fc1,fc2):
-    pre_joint = Dense(fc1)(inputs)
-    pre_joint = ReLU()(pre_joint)
+    pre_joint = Dense(fc1, activation='relu')(inputs)
     pre_joint = Dense(fc2)(pre_joint)
     pre_joint = BatchNormalization()(pre_joint)
     pre_joint = Lambda(lambda x: tf.keras.backend.l2_normalize(x,axis=1))(pre_joint)
@@ -133,29 +155,43 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         t_branch = Embedding(word_num, text_dimensions)(text_input)
         t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
 
+        print('Attaching branch input to LSTM layer')
+        t_branch = pre_joint_embed_layers(t_branch,512,256)
+
         #train t_branch
         t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
-        t_branch = tf.Model(inputs=text_input, outputs= t_branch)
-        t_branch.fit(
-            x=data.x_train(),
+        t_branch = tf.keras.Model(inputs=text_input, outputs= t_branch)
+        plot_model(t_branch, to_file='model_plot.png', show_shapes=True)
+
+        print(data.x_train()[1][3])
+
+        t_branch.compile(optimizer='Adam', metrics=['acc'])
+        h = t_branch.fit(
+            x=data.x_train()[1],
             y=data.y_train(),
-            validation_data=(data.x_valid(),data.y_valid()),
+            validation_data=(data.x_valid()[1],data.y_valid()),
             epochs=LSTM_GENERATIONS,
-            verbose=2
+            verbose=1
         )
+
+        plt.plot(h.history['acc'])
+        plt.plot(h.history['val_acc'])
+        plt.title('acc')
+        plt.ylabel('acc')
+        plt.xlabel('epoch')
+        plt.legend(['train', 'test'], loc='upper left')
+        plt.savefig('lstm_training.png')
 
         print('Trained LSTM branch. Saving...')
         t_branch.save(directory_path)
-    
-    print('Attaching branch input to LSTM layer')
-    t_branch = pre_joint_embed_layers(t_branch.layers[-2].output,512,256)
 
+    t_branch = tf.keras.Model(inputs=text_input, outputs=t_branch.layers[-2].output)
     print("Generated lstm branch")
     
     return t_branch
 
 def cnn_branch():
-    inceptionresnet = tf.keras.applications.InceptionResNetV2()
+    inceptionresnet = tf.keras.applications.InceptionResNetV2(include_top=False, input_shape=(150,150,3))
     
     for layer in inceptionresnet.layers:
         layer.trainable = False
@@ -175,6 +211,7 @@ def build_model(name, data, word_count, text_input_length, text_dimensions):
 
     #generate branches
     t_branch = lstm_branch(name, data, word_count, text_input, text_dimensions)
+    raise Exception
     (i_branch, image_input) = cnn_branch()
     d_branch = Input(shape=(DETAIL_FEATURES,))
     #joint embedding and convolution
@@ -196,30 +233,27 @@ def build_model(name, data, word_count, text_input_length, text_dimensions):
 
 #turns a tweet into an input. tokenizer is optional, in case data is already tokenized.
 def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
-    #input is (([image],[text],[user data]), result)
 
     #check for image, else produce blank image
-    image = np.zeros((299,299,3))
     path = '{}/{}.jpg'.format(image_directory, tweet['id'])
     if os.path.isfile(path):
-        image = np.asarray(Image.open(path))
+        image = np.asarray(Image.open(path, ).convert('RGB').resize((150,150)))
+    else:
+        image = DEFAULT_IMAGE
 
     #get tokenized text
     if 'sequence' in tweet:
-        text = tweet['sequence']
+        text = np.array(tweet['sequence'], dtype='float32')
     else:
         if tokenizer is None:
             print('Please supply tokenizer for non-sequenced tweets')
             raise Exception
-        tokens = np.array(
+        text = np.array(
             tokenizer.texts_to_sequences([tweet['text']])[0]
         )
         #we pad the left side like this because we're iterating on each json object
-        text = np.zeros(input_size)
-        text[-len(tokens):] = tokens
     
-    text = np.array(text)
-
+    text = np.pad(text, (0,input_size - len(text)))
 
     #get user data
     posted = datetime.fromtimestamp(tweet['created_at'])
@@ -251,14 +285,27 @@ def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
 
 def generate_training_data(data, image_directory,text_input_size,tokenizer=None):
     i_data, t_data, u_data, truth = [], [], [], []
+    tweets = len(data)
 
-    for tweet in data:
+    counter = 0
+    for tweet in data[:100_000]:
         ((i,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size,tokenizer)
+
         i_data.append(i)
         t_data.append(t)
         u_data.append(u)
         truth.append(tr)
+        counter +=1 
+        print('Converted {}/{} tweets'.format(counter,tweets), end='\r')
 
+
+    print()
+    #shuffle everything in unison
+    p = np.random.permutation(len(i_data))
+    i_data = np.array(i_data, dtype='uint8')[p]
+    t_data = np.array(t_data)[p]
+    u_data = np.array(u_data)[p]
+    truth  = keras.utils.np_utils.to_categorical(truth, CATEGORIES)[p]
     return TrainingData(i_data, t_data, u_data, truth)
 
 def main():
@@ -300,8 +347,9 @@ def main():
         tweet['sequence'] = np.array(tweet['sequence'])
 
     print('Generating training/validation data')
-    formatted_data = generate_training_data(data, args['imageset'])
-
+    formatted_data = generate_training_data(data, args['imageset'], text_input_length, tokenizer)
+    print('Generated Training data')
+    
     #load model, or create one if no directory supplied
     if args['model'] is None:
         #create and save model
@@ -319,6 +367,7 @@ def main():
     
     plot_model(model, to_file='model_plot.png', show_shapes=True)
 
+    '''
     #some testing code + example singular input
     data = json.load(open('./Data Sets/test.json', 'r'))
     ((i,t,u),tr) = generate_training_data(data, '.', text_input_length, tokenizer)
@@ -326,5 +375,5 @@ def main():
     model.compile()
     
     print(model.predict([i,t,u]))
-
+    '''
 main()
