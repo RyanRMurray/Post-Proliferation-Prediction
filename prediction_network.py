@@ -122,18 +122,34 @@ def pre_joint_embed_layers(inputs, fc1,fc2):
     
     return pre_joint
 
-def lstm_branch(word_num, text_input, text_dimensions):
-    t_branch = Embedding(word_num, text_dimensions)(text_input)
-    t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
+def lstm_branch(name, data, word_num, text_input, text_dimensions):
+    directory_path = './Models/{}/LSTM'.format(name)
 
-    #train t_branch
-    t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
-    t_branch = tf.Model(inputs=text_input, outputs= t_branch)
-    t_branch.fit()
+    if os.path.isdir(directory_path):
+        print('Loading trained LSTM Branch')
+        t_branch = tf.keras.models.load_model(directory_path)
+        print('Loaded')
+    else:
+        t_branch = Embedding(word_num, text_dimensions)(text_input)
+        t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
+
+        #train t_branch
+        t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
+        t_branch = tf.Model(inputs=text_input, outputs= t_branch)
+        t_branch.fit(
+            x=data.x_train(),
+            y=data.y_train(),
+            validation_data=(data.x_valid(),data.y_valid()),
+            epochs=LSTM_GENERATIONS,
+            verbose=2
+        )
+
+        print('Trained LSTM branch. Saving...')
+        t_branch.save(directory_path)
     
-    t_branch = pre_joint_embed_layers(t_branch,512,256)
+    print('Attaching branch input to LSTM layer')
+    t_branch = pre_joint_embed_layers(t_branch.layers[-2].output,512,256)
 
-    #t_branch.summary()
     print("Generated lstm branch")
     
     return t_branch
@@ -154,12 +170,12 @@ def cnn_branch():
     print("Generated cnn branch")
     return (i_branch, inceptionresnet.input)
 
-def build_model(tv_data, word_count, text_input_length, text_dimensions):
+def build_model(name, data, word_count, text_input_length, text_dimensions):
     text_input = Input(shape=(text_input_length,))
 
     #generate branches
+    t_branch = lstm_branch(name, data, word_count, text_input, text_dimensions)
     (i_branch, image_input) = cnn_branch()
-    t_branch = lstm_branch(word_count, text_input, text_dimensions)
     d_branch = Input(shape=(DETAIL_FEATURES,))
     #joint embedding and convolution
     joint = concatenate([i_branch.output, t_branch])
@@ -248,7 +264,7 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
 def main():
     args = vars(parser.parse_args())
 
-    if not os.path.is_directory(args['imageset']):
+    if not os.path.isdir(args['imageset']):
         print('Please enter a path to a valid image directory')
     
     if args['dataset'][-5:] != '.json' or not os.path.isfile(args['dataset']):
@@ -284,15 +300,15 @@ def main():
         tweet['sequence'] = np.array(tweet['sequence'])
 
     print('Generating training/validation data')
-    (training, validation) = generate_training_data(data, args['imageset'])
+    formatted_data = generate_training_data(data, args['imageset'])
 
     #load model, or create one if no directory supplied
     if args['model'] is None:
         #create and save model
         print('Creating model from input.')
-        model : tf.keras.Model = build_model((training, validation), word_count, text_input_length, dims) 
         print('Enter a name for this model: ')
         name = input()
+        model : tf.keras.Model = build_model(name, formatted_data, word_count, text_input_length, dims)
         model._name = name
         model.save('./Models/{}'.format(name))
         print('Saved model to ./Models{}'.format(name))
