@@ -16,6 +16,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 import argparse
 parser = argparse.ArgumentParser(description='Generate and train a model to predict success of Twitter posts')
 parser.add_argument('dataset', metavar='dataset', type=str, help='Path to the training data set')
+parser.add_argument('imageset', metavar='imageset', type=str, help='Path to the training data set\'s images')
 parser.add_argument('tokenizer', metavar='tokenizer', type=str, nargs='?', help='Path to a tokenizer with associated metrics (optional)', default=None)
 parser.add_argument('model', metavar='model', type=str, nargs='?', help='Path to a pre-generated model (optional)', default=None)
 
@@ -47,6 +48,36 @@ from typing import Tuple
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
 CATEGORIES      = 9
+LSTM_GENERATIONS = 10_000
+
+class TrainingData():
+    def __init__(self, i_data, t_data, u_data, truth):
+        #shuffle everything in unison
+        p = np.random.permutation(len(i_data))
+        i_data = np.array(i_data)[p]
+        t_data = np.array(i_data)[p]
+        u_data = np.array(i_data)[p]
+        truth  = keras.utils.np_utils.to_categorical(truth, CATEGORIES)[p]
+
+        #split training/validation
+        s = int(len(i_data)*0.8)
+        (self.i_train,     self.i_valid)     = np.split(i_data, [s])
+        (self.t_train,     self.t_valid)     = np.split(t_data, [s])
+        (self.u_train,     self.u_valid)     = np.split(u_data, [s])
+        (self.truth_train, self.truth_valid) = np.split(truth, [s])
+    
+    def x_train(self):
+        return [self.i_train, self.t_train, self.u_train]
+    
+    def y_train(self):
+        return self.truth_train
+
+    def x_valid(self):
+        return [self.i_valid, self.t_valid, self.u_valid]
+    
+    def y_valid(self):
+        return self.truth_valid
+
 
 #create token sequences for our inputs, and get info for generating the lstm branch
 def tokenize_data(data : list) -> Tuple[list, int, int, Tokenizer]:
@@ -94,6 +125,12 @@ def pre_joint_embed_layers(inputs, fc1,fc2):
 def lstm_branch(word_num, text_input, text_dimensions):
     t_branch = Embedding(word_num, text_dimensions)(text_input)
     t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
+
+    #train t_branch
+    t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
+    t_branch = tf.Model(inputs=text_input, outputs= t_branch)
+    t_branch.fit()
+    
     t_branch = pre_joint_embed_layers(t_branch,512,256)
 
     #t_branch.summary()
@@ -117,7 +154,7 @@ def cnn_branch():
     print("Generated cnn branch")
     return (i_branch, inceptionresnet.input)
 
-def build_model(data : str, word_count, text_input_length, text_dimensions):
+def build_model(tv_data, word_count, text_input_length, text_dimensions):
     text_input = Input(shape=(text_input_length,))
 
     #generate branches
@@ -153,7 +190,7 @@ def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
 
     #get tokenized text
     if 'sequence' in tweet:
-        text = tweet['text']
+        text = tweet['sequence']
     else:
         if tokenizer is None:
             print('Please supply tokenizer for non-sequenced tweets')
@@ -206,20 +243,16 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
         u_data.append(u)
         truth.append(tr)
 
-    return (
-        (
-            np.array(i_data),
-            np.array(t_data),
-            np.array(u_data)
-        ),
-        keras.utils.np_utils.to_categorical(truth, CATEGORIES)
-    )
+    return TrainingData(i_data, t_data, u_data, truth)
 
 def main():
     args = vars(parser.parse_args())
+
+    if not os.path.is_directory(args['imageset']):
+        print('Please enter a path to a valid image directory')
     
     if args['dataset'][-5:] != '.json' or not os.path.isfile(args['dataset']):
-        print("Please enter a path to a valid json file")
+        print('Please enter a path to a valid json file')
         return
     else:
         print('Loading data set')
@@ -250,11 +283,14 @@ def main():
     for tweet in data:
         tweet['sequence'] = np.array(tweet['sequence'])
 
+    print('Generating training/validation data')
+    (training, validation) = generate_training_data(data, args['imageset'])
+
     #load model, or create one if no directory supplied
     if args['model'] is None:
         #create and save model
         print('Creating model from input.')
-        model : tf.keras.Model = build_model(data, word_count, text_input_length, dims) 
+        model : tf.keras.Model = build_model((training, validation), word_count, text_input_length, dims) 
         print('Enter a name for this model: ')
         name = input()
         model._name = name
