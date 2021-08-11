@@ -50,7 +50,8 @@ from typing import Tuple, List
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
 CATEGORIES      = 9
-LSTM_GENERATIONS = 100
+LSTM_GENERATIONS = 1000
+LSTM_LENGTH      = 150
 DEFAULT_IMAGE = np.zeros((150,150,3))
 
 class TrainingData():
@@ -152,6 +153,7 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         t_branch = tf.keras.models.load_model(directory_path)
         print('Loaded')
     else:
+        print('Generating LSTM Branch')
         t_branch = Embedding(word_num, text_dimensions)(text_input)
         t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
 
@@ -163,8 +165,7 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         t_branch = tf.keras.Model(inputs=text_input, outputs= t_branch)
         plot_model(t_branch, to_file='model_plot.png', show_shapes=True)
 
-        print(data.x_train()[1][3])
-
+       
         t_branch.compile(optimizer='Adam', metrics=['acc'])
         h = t_branch.fit(
             x=data.x_train()[1],
@@ -207,7 +208,7 @@ def cnn_branch():
     return (i_branch, inceptionresnet.input)
 
 def build_model(name, data, word_count, text_input_length, text_dimensions):
-    text_input = Input(shape=(text_input_length,))
+    text_input = Input(shape=(LSTM_LENGTH,))
 
     #generate branches
     t_branch = lstm_branch(name, data, word_count, text_input, text_dimensions)
@@ -234,13 +235,14 @@ def build_model(name, data, word_count, text_input_length, text_dimensions):
 #turns a tweet into an input. tokenizer is optional, in case data is already tokenized.
 def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
 
+    '''
     #check for image, else produce blank image
     path = '{}/{}.jpg'.format(image_directory, tweet['id'])
     if os.path.isfile(path):
         image = np.asarray(Image.open(path, ).convert('RGB').resize((150,150)))
     else:
         image = DEFAULT_IMAGE
-
+    '''
     #get tokenized text
     if 'sequence' in tweet:
         text = np.array(tweet['sequence'], dtype='float32')
@@ -253,7 +255,7 @@ def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
         )
         #we pad the left side like this because we're iterating on each json object
     
-    text = np.pad(text, (0,input_size - len(text)))
+    text = np.pad(text, (0,LSTM_LENGTH - len(text)))
 
     #get user data
     posted = datetime.fromtimestamp(tweet['created_at'])
@@ -281,17 +283,18 @@ def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
     rts = int(tweet['final_metrics']['retweet_count'])
     mag = 0 if rts == 0 else int(math.log10(rts))+1
 
-    return ((image, text, user_features), mag)
+    return ((None, text, user_features), mag)
 
 def generate_training_data(data, image_directory,text_input_size,tokenizer=None):
     i_data, t_data, u_data, truth = [], [], [], []
     tweets = len(data)
 
     counter = 0
-    for tweet in data[:100_000]:
-        ((i,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size,tokenizer)
+    for tweet in data[:10]:
+        ((_,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size,tokenizer)
 
-        i_data.append(i)
+        #i_data.append(i)
+        i_data.append([0])
         t_data.append(t)
         u_data.append(u)
         truth.append(tr)
@@ -341,11 +344,11 @@ def main():
         print('Loading Tokenizer from file.')
         with open(args['tokenizer'], 'rb') as f:
             (tokenizer, word_count,text_input_length,dims) = pickle.load(f)
-    
+    '''
     print('Loaded. Converting sequences to numpy arrays')
     for tweet in data:
         tweet['sequence'] = np.array(tweet['sequence'])
-
+    '''
     print('Generating training/validation data')
     formatted_data = generate_training_data(data, args['imageset'], text_input_length, tokenizer)
     print('Generated Training data')
