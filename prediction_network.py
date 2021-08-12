@@ -150,7 +150,7 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
             epochs=LSTM_GENERATIONS,
             batch_size=1000,
             verbose=1,
-            class_weights=weights
+            class_weight=weights
         )
 
         plt.plot(h.history['acc'])
