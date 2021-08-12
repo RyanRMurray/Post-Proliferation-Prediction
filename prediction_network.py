@@ -49,7 +49,7 @@ from typing import Tuple, List
 #   author verified status
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
-CATEGORIES      = 9
+CATEGORIES      = 6
 LSTM_GENERATIONS = 1000
 LSTM_LENGTH      = 150
 DEFAULT_IMAGE = np.zeros((150,150,3))
@@ -114,6 +114,15 @@ def pre_joint_embed_layers(inputs, fc1,fc2):
 
 def lstm_branch(name, data, word_num, text_input, text_dimensions):
     directory_path = './Models/{}/LSTM'.format(name)
+    #class weights for imbalanced input
+    weights = {
+        0:1,
+        1:10,
+        2:100,
+        3:1000,
+        4:10000,
+        5:100000
+    }
 
     if os.path.isdir(directory_path):
         print('Loading trained LSTM Branch')
@@ -133,13 +142,15 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         plot_model(t_branch, to_file='model_plot.png', show_shapes=True)
 
        
-        t_branch.compile(optimizer='Adam', metrics=['acc'])
+        t_branch.compile(optimizer='Adam', metrics=['acc'], loss='categorical_crossentropy')
         h = t_branch.fit(
             x=data.x_train()[1],
             y=data.y_train(),
             validation_data=(data.x_valid()[1],data.y_valid()),
             epochs=LSTM_GENERATIONS,
-            verbose=1
+            batch_size=1000,
+            verbose=1,
+            class_weights=weights
         )
 
         plt.plot(h.history['acc'])
@@ -210,7 +221,7 @@ def tweet_to_training_pair(tweet, image_directory, input_size, splitter, tokeniz
     else:
         image = DEFAULT_IMAGE
     '''
-    
+
     text = np.concatenate(
         tokenizer.texts_to_sequences(splitter.tokenize(tweet['text']))
     )
@@ -239,9 +250,12 @@ def tweet_to_training_pair(tweet, image_directory, input_size, splitter, tokeniz
 
     #get ground truth for one-hot encoding
     #one class for 0, 1 class for magnitude 1, ect.
-    #as of writing, no tweet has recieved over 10m retweets, so we'll stick with 9 categories for now
+    #we'll use 6 categories for now, with the 6th being anything above 100k RTs
     rts = int(tweet['final_metrics']['retweet_count'])
-    mag = 0 if rts == 0 else int(math.log10(rts))+1
+    if rts >= 100_000:
+        mag = 6
+    else:
+        mag = 0 if rts == 0 else int(math.log10(rts))+1
 
     return ((None, text, user_features), mag)
 
