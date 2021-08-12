@@ -121,11 +121,12 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
     #class weights for imbalanced input
     weights = {
         0:1,
-        1:10,
-        2:100,
-        3:1000,
-        4:10000,
-        5:100000
+        1:1,
+        2:10,
+        3:100,
+        4:1000,
+        5:10000,
+        6:100000
     }
 
     if os.path.isdir(directory_path):
@@ -135,8 +136,8 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
     else:
         print('Generating LSTM Branch')
         #t_branch = Embedding(word_num, text_dimensions)(text_input)
-        t_branch = Embedding(50_000, 34)(text_input)
-        t_branch = LSTM(256, dropout=0.2, recurrent_dropout=0.2, kernel_regularizer=regularizers.l2(0.05))(t_branch)
+        t_branch = Embedding(50_000, 100)(text_input)
+        t_branch = LSTM(256, dropout=0.2, kernel_regularizer=regularizers.l2(0.05))(t_branch)
 
         #train t_branch
         t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
@@ -144,6 +145,9 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         t_branch = tf.keras.Model(inputs=text_input, outputs= t_branch)
         t_branch.summary()
         plot_model(t_branch, to_file='model_plot.png', show_shapes=True)
+
+        print(data.x_valid()[1].dtype)
+        print(data.y_valid().shape)
 
         t_branch.compile(optimizer='Adam', metrics=['accuracy'], loss='categorical_crossentropy')
         h = t_branch.fit(
@@ -157,10 +161,11 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
             class_weight=weights
         )
 
-        plt.plot(h.history['acc'])
-        plt.plot(h.history['val_acc'])
-        plt.title('acc')
-        plt.ylabel('acc')
+
+        plt.plot(h.history['accuracy'])
+        plt.plot(h.history['val_accuracy'])
+        plt.title('model accuracy')
+        plt.ylabel('accuracy')
         plt.xlabel('epoch')
         plt.legend(['train', 'test'], loc='upper left')
         plt.savefig('lstm_training.png')
@@ -281,14 +286,14 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
     print()
     print('Tokenizing...')
     #tokenize
-    t_data = tokenizer.texts_to_sequences([splitter.tokenize(t) for t in t_data])
+    t_data = tokenizer.texts_to_sequences([splitter.tokenize(t)  if len(splitter.tokenize(t)) > 0 else [0] for t in t_data])
     t_data = pad_sequences(t_data, maxlen=LSTM_LENGTH)
     print('Done.')
 
     #shuffle everything in unison
     p = np.random.permutation(len(i_data))
     i_data = np.array(i_data, dtype='uint8')[p]
-    t_data = np.array(t_data)[p]
+    t_data = np.array(t_data, dtype='uint16')[p]
     u_data = np.array(u_data)[p]
     truth  = keras.utils.np_utils.to_categorical(truth, CATEGORIES)[p]
     return TrainingData(i_data, t_data, u_data, truth)
