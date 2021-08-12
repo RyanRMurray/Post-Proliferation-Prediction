@@ -19,7 +19,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Generate and train a model to predict success of Twitter posts')
 parser.add_argument('dataset', metavar='dataset', type=str, help='Path to the training data set')
 parser.add_argument('imageset', metavar='imageset', type=str, help='Path to the training data set\'s images')
-parser.add_argument('tokenizer', metavar='tokenizer', type=str, nargs='?', help='Path to a tokenizer with associated metrics (optional)', default=None)
+parser.add_argument('tokenizer', metavar='tokenizer', type=str, help='Path to a tokenizer with associated metrics')
 parser.add_argument('model', metavar='model', type=str, nargs='?', help='Path to a pre-generated model (optional)', default=None)
 
 from tensorflow.python.keras.layers.recurrent import SimpleRNN
@@ -82,7 +82,7 @@ def create_tokenizer(data):
     tweets = len(data)
     words = set()
     input_size = 0
-    splitter = TweetTokenizer()
+    splitter = TweetTokenizer(strip_handles=True, reduce_len=True, preserve_case=False)
 
     data = [splitter.tokenize(tweet) for tweet in data]
 
@@ -102,39 +102,6 @@ def create_tokenizer(data):
     name = input()
     with open('./Tokenizers/{}.pickle'.format(name), 'wb') as f:
         pickle.dump(to_pickle, f)
-
-#create token sequences for our inputs, and get info for generating the lstm branch
-def tokenize_data(data : list) -> Tuple[list, int, int, Tokenizer]:
-    tweets = len(data)
-    words = set()
-    input_size = 0
-
-    for tweet in data:
-        symbols = re.split(r'\s+', tweet['text'])
-        input_size = max(input_size, len(symbols))
-        words.update(symbols)
-
-    dims = math.ceil(len(words) ** (1/4))
-
-    print('{} unique symbols, input size is {}. Using {} dimensions.'.format(len(words), input_size, dims))
-
-    tokenizer = Tokenizer(len(words), filters='!"#$%&()*+,-/:;=?@[\\]^_`{|}~\t\n')
-    tokenizer.fit_on_texts([tweet['text'] for tweet in data])
-
-    counter = 0
-    for tweet in data:
-        tokens = tokenizer.texts_to_sequences([tweet['text']])[0]
-        tokens = ([0] * (input_size - len(tokens))) + tokens
-        #we pad the left side like this because we're iterating on each json object
-        tweet['sequence'] = tokens
-
-        counter += 1
-        print('Generated {}/{} sequences'.format(counter, tweets), end='\r')
-
-    print()
-    print("Generated Sequences")
-
-    return (data, len(words), input_size, dims, tokenizer)
 
 #adds layers as described in rt wars paper
 def pre_joint_embed_layers(inputs, fc1,fc2):
@@ -233,7 +200,7 @@ def build_model(name, data, word_count, text_input_length, text_dimensions):
     return final
 
 #turns a tweet into an input. tokenizer is optional, in case data is already tokenized.
-def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
+def tweet_to_training_pair(tweet, image_directory, input_size, splitter, tokenizer=None):
 
     '''
     #check for image, else produce blank image
@@ -243,18 +210,11 @@ def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
     else:
         image = DEFAULT_IMAGE
     '''
-    #get tokenized text
-    if 'sequence' in tweet:
-        text = np.array(tweet['sequence'], dtype='float32')
-    else:
-        if tokenizer is None:
-            print('Please supply tokenizer for non-sequenced tweets')
-            raise Exception
-        text = np.array(
-            tokenizer.texts_to_sequences([tweet['text']])[0]
-        )
-        #we pad the left side like this because we're iterating on each json object
     
+    text = np.concatenate(
+        tokenizer.texts_to_sequences(splitter.tokenize(tweet['text']))
+    )
+    #we pad the left side like this because we're iterating on each json object
     text = np.pad(text, (0,LSTM_LENGTH - len(text)))
 
     #get user data
@@ -287,11 +247,12 @@ def tweet_to_training_pair(tweet, image_directory, input_size, tokenizer=None):
 
 def generate_training_data(data, image_directory,text_input_size,tokenizer=None):
     i_data, t_data, u_data, truth = [], [], [], []
+    splitter = TweetTokenizer(strip_handles=True, reduce_len=True, preserve_case=False)
     tweets = len(data)
 
     counter = 0
-    for tweet in data[:10]:
-        ((_,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size,tokenizer)
+    for tweet in data:
+        ((_,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size,splitter,tokenizer)
 
         #i_data.append(i)
         i_data.append([0])
@@ -326,29 +287,10 @@ def main():
             data = json.load(f)
             print('Loaded file.')
 
-    #get tokenized data and tokenizer.
-    if args['tokenizer'] is None:
-        print('Creating Tokenizer...')
-        (data, word_count, text_input_length, dims, tokenizer) = tokenize_data(data)
-        to_pickle = (tokenizer, word_count, text_input_length, dims)
-        print('Enter a name for this tokenizer: ')
-        name = input()
-        with open('./Tokenizers/{}.pickle'.format(name), 'wb') as f:
-            pickle.dump(to_pickle, f)
+    #get tokenizer
+    with open(args['tokenizer'], 'rb') as f:
+        (tokenizer, word_count,text_input_length,dims) = pickle.load(f)
 
-        print('Saving tokenized data...')
-        with open(args['dataset'], 'w') as f:
-            json.dump(data,f)
-        print('Saved.')
-    else:
-        print('Loading Tokenizer from file.')
-        with open(args['tokenizer'], 'rb') as f:
-            (tokenizer, word_count,text_input_length,dims) = pickle.load(f)
-    '''
-    print('Loaded. Converting sequences to numpy arrays')
-    for tweet in data:
-        tweet['sequence'] = np.array(tweet['sequence'])
-    '''
     print('Generating training/validation data')
     formatted_data = generate_training_data(data, args['imageset'], text_input_length, tokenizer)
     print('Generated Training data')
