@@ -49,7 +49,7 @@ from typing import Tuple, List
 #   author verified status
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
-CATEGORIES      = 6
+CATEGORIES      = 7
 LSTM_GENERATIONS = 1000
 LSTM_LENGTH      = 150
 DEFAULT_IMAGE = np.zeros((150,150,3))
@@ -78,7 +78,7 @@ class TrainingData():
         return self.truth_valid
 
 #create a tokenizer
-def create_tokenizer(data):
+def create_tokenizer(data, max_words=None):
     tweets = len(data)
     words = set()
     input_size = 0
@@ -92,9 +92,13 @@ def create_tokenizer(data):
     
     dims = math.ceil(len(words) ** (1/4))
 
-    print('{} unique symbols, input size is {}. Using {} dimensions.'.format(len(words), input_size, dims))
+    if max_words is None:
+        print('{} unique symbols, input size is {}. Using {} dimensions.'.format(len(words), input_size, dims))
+        tokenizer = Tokenizer(num_words=len(words))
+    else:
+        print('{} unique symbols, truncating to {}, input size is {}. Using {} dimensions.'.format(len(words), max_words, input_size, dims))
+        tokenizer = Tokenizer(num_words=max_words)
 
-    tokenizer = Tokenizer(len(words))
     tokenizer.fit_on_texts(data)
 
     to_pickle = (tokenizer, len(words), input_size, dims)
@@ -130,25 +134,25 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         print('Loaded')
     else:
         print('Generating LSTM Branch')
-        t_branch = Embedding(word_num, text_dimensions)(text_input)
-        t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
-
-        print('Attaching branch input to LSTM layer')
-        t_branch = pre_joint_embed_layers(t_branch,512,256)
+        #t_branch = Embedding(word_num, text_dimensions)(text_input)
+        t_branch = Embedding(50_000, 34)(text_input)
+        t_branch = LSTM(256, dropout=0.2, recurrent_dropout=0.2, kernel_regularizer=regularizers.l2(0.05))(t_branch)
 
         #train t_branch
         t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
+
         t_branch = tf.keras.Model(inputs=text_input, outputs= t_branch)
+        t_branch.summary()
         plot_model(t_branch, to_file='model_plot.png', show_shapes=True)
 
-       
-        t_branch.compile(optimizer='Adam', metrics=['acc'], loss='categorical_crossentropy')
+        t_branch.compile(optimizer='Adam', metrics=['accuracy'], loss='categorical_crossentropy')
         h = t_branch.fit(
             x=data.x_train()[1],
             y=data.y_train(),
             validation_data=(data.x_valid()[1],data.y_valid()),
-            epochs=LSTM_GENERATIONS,
-            batch_size=1000,
+            epochs=5,
+            #epochs=LSTM_GENERATIONS,
+            #batch_size=1000,
             verbose=1,
             class_weight=weights
         )
@@ -164,7 +168,8 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         print('Trained LSTM branch. Saving...')
         t_branch.save(directory_path)
 
-    t_branch = tf.keras.Model(inputs=text_input, outputs=t_branch.layers[-2].output)
+    print('Attaching branch input to LSTM layer')
+    t_branch = pre_joint_embed_layers(t_branch.layers[-2].output,512,256)
     print("Generated lstm branch")
     
     return t_branch
@@ -211,7 +216,7 @@ def build_model(name, data, word_count, text_input_length, text_dimensions):
     return final
 
 #turns a tweet into an input. tokenizer is optional, in case data is already tokenized.
-def tweet_to_training_pair(tweet, image_directory, input_size, splitter, tokenizer=None):
+def tweet_to_training_pair(tweet, image_directory, input_sizeone):
 
     '''
     #check for image, else produce blank image
@@ -222,11 +227,8 @@ def tweet_to_training_pair(tweet, image_directory, input_size, splitter, tokeniz
         image = DEFAULT_IMAGE
     '''
 
-    text = np.concatenate(
-        tokenizer.texts_to_sequences(splitter.tokenize(tweet['text']))
-    )
-    #we pad the left side like this because we're iterating on each json object
-    text = np.pad(text, (0,LSTM_LENGTH - len(text)))
+    #get text
+    text = tweet['text']
 
     #get user data
     posted = datetime.fromtimestamp(tweet['created_at'])
@@ -266,7 +268,7 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
 
     counter = 0
     for tweet in data:
-        ((_,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size,splitter,tokenizer)
+        ((_,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size)
 
         #i_data.append(i)
         i_data.append([0])
@@ -276,8 +278,13 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
         counter +=1 
         print('Converted {}/{} tweets'.format(counter,tweets), end='\r')
 
-
     print()
+    print('Tokenizing...')
+    #tokenize
+    t_data = tokenizer.texts_to_sequences([splitter.tokenize(t) for t in t_data])
+    t_data = pad_sequences(t_data, maxlen=LSTM_LENGTH)
+    print('Done.')
+
     #shuffle everything in unison
     p = np.random.permutation(len(i_data))
     i_data = np.array(i_data, dtype='uint8')[p]
@@ -335,4 +342,5 @@ def main():
     
     print(model.predict([i,t,u]))
     '''
+    
 main()
