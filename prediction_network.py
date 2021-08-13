@@ -50,20 +50,73 @@ from typing import Tuple, List
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
 CATEGORIES      = 7
-LSTM_GENERATIONS = 1000
+LSTM_GENERATIONS = 100
 LSTM_LENGTH      = 150
-DEFAULT_IMAGE = np.zeros((150,150,3))
+IMAGE_SHAPE = (1)
+DEFAULT_IMAGE = np.zeros(IMAGE_SHAPE)
 
 class TrainingData():
     def __init__(self, i_data, t_data, u_data, truth):
+        training_num = 0.8
+        self.i_train, self.t_train, self.u_train, self.truth_train = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,150),dtype='uint16'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
+        self.i_valid, self.t_valid, self.u_valid, self.truth_valid = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,150),dtype='uint16'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
 
-        #split training/validation
-        s = int(len(i_data)*0.8)
-        (self.i_train,     self.i_valid)     = np.split(i_data, [s])
-        (self.t_train,     self.t_valid)     = np.split(t_data, [s])
-        (self.u_train,     self.u_valid)     = np.split(u_data, [s])
-        (self.truth_train, self.truth_valid) = np.split(truth, [s])
+        #sort by category
+        print('TrainingData: Sorting by category')
+        i_samples = {k:[] for k in range(CATEGORIES)}
+        t_samples = {k:[] for k in range(CATEGORIES)}
+        u_samples = {k:[] for k in range(CATEGORIES)}
 
+        for (i,t,u,tr) in zip(i_data,t_data,u_data,truth):
+            i_samples[tr].append(i)
+            t_samples[tr].append(t)
+            u_samples[tr].append(u)
+
+        #convert into arrays
+        print('TrainingData: Converting to Arrays')
+        for i in range(CATEGORIES):
+            i_samples[i] = np.array(i_samples[i], dtype='uint8')
+            t_samples[i] = np.array(t_samples[i], dtype='uint16')
+            u_samples[i] = np.array(u_samples[i])
+
+        #split
+        print('TrainingData: Splitting Train/Validate')
+        for i in range(CATEGORIES):
+            i_s = i_samples[i]
+            t_s = t_samples[i]
+            u_s = u_samples[i]
+
+            s = int(len(i_s)*training_num)
+            (i_t,i_v) = np.split(i_s, [s])
+            (t_t,t_v) = np.split(t_s, [s])
+            (u_t,u_v) = np.split(u_s, [s])
+
+            if len(i_t) != 0:
+                self.i_train = np.concatenate((self.i_train,i_t))
+                self.t_train = np.concatenate((self.t_train,t_t))
+                self.u_train = np.concatenate((self.u_train,u_t))
+                self.i_valid = np.concatenate((self.i_valid,i_v))
+                self.t_valid = np.concatenate((self.t_valid,t_v))
+                self.u_valid = np.concatenate((self.u_valid,u_v))
+
+                self.truth_train = np.concatenate((self.truth_train, np.array([[i]] * len(i_t))))
+                self.truth_valid = np.concatenate((self.truth_valid, np.array([[i]] * len(i_v))))
+
+        self.i_train = self.i_train[1:]
+        self.t_train = self.t_train[1:]
+        self.u_train = self.u_train[1:]
+        self.i_valid = self.i_valid[1:]
+        self.t_valid = self.t_valid[1:]
+        self.u_valid = self.u_valid[1:]
+        self.truth_train = self.truth_train[1:]
+        self.truth_valid = self.truth_valid[1:]
+
+        #to categories
+        print('TrainingData: Categorising truth values')
+        self.truth_train = keras.utils.np_utils.to_categorical(self.truth_train, CATEGORIES)
+        self.truth_valid = keras.utils.np_utils.to_categorical(self.truth_valid, CATEGORIES)
+
+        #note:  we dont shuffle since the fitting algorithm does that for us
     
     def x_train(self):
         return [self.i_train, self.t_train, self.u_train]
@@ -121,7 +174,7 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
     #class weights for imbalanced input
     weights = {
         0:1,
-        1:1,
+        1:1.5,
         2:10,
         3:100,
         4:1000,
@@ -137,7 +190,7 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         print('Generating LSTM Branch')
         #t_branch = Embedding(word_num, text_dimensions)(text_input)
         t_branch = Embedding(50_000, 100)(text_input)
-        t_branch = LSTM(256, dropout=0.2, kernel_regularizer=regularizers.l2(0.05))(t_branch)
+        t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
 
         #train t_branch
         t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
@@ -154,11 +207,10 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
             x=data.x_train()[1],
             y=data.y_train(),
             validation_data=(data.x_valid()[1],data.y_valid()),
-            epochs=5,
-            #epochs=LSTM_GENERATIONS,
-            #batch_size=1000,
+            epochs=LSTM_GENERATIONS,
+            batch_size=1000,
             verbose=1,
-            class_weight=weights
+            class_weight=weights,
         )
 
 
@@ -257,12 +309,12 @@ def tweet_to_training_pair(tweet, image_directory, input_sizeone):
 
     #get ground truth for one-hot encoding
     #one class for 0, 1 class for magnitude 1, ect.
-    #we'll use 6 categories for now, with the 6th being anything above 100k RTs
-    rts = int(tweet['final_metrics']['retweet_count'])
-    if rts >= 100_000:
+    #we'll use 6 categories for now, with the 6th being anything above 100k likes
+    likes = int(tweet['final_metrics']['like_count'])
+    if likes >= 100_000:
         mag = 6
     else:
-        mag = 0 if rts == 0 else int(math.log10(rts))+1
+        mag = 0 if likes == 0 else int(math.log10(likes))+1
 
     return ((None, text, user_features), mag)
 
@@ -290,12 +342,6 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
     t_data = pad_sequences(t_data, maxlen=LSTM_LENGTH)
     print('Done.')
 
-    #shuffle everything in unison
-    p = np.random.permutation(len(i_data))
-    i_data = np.array(i_data, dtype='uint8')[p]
-    t_data = np.array(t_data, dtype='uint16')[p]
-    u_data = np.array(u_data)[p]
-    truth  = keras.utils.np_utils.to_categorical(truth, CATEGORIES)[p]
     return TrainingData(i_data, t_data, u_data, truth)
 
 def main():
