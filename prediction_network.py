@@ -1,18 +1,9 @@
 import json
-import cv2
-import re
 import math
-import itertools
-import sys
 import pickle
-from datetime import datetime
-from PIL import Image
-import gc
 import matplotlib.pyplot as plt
 from nltk.tokenize import TweetTokenizer
-from urllib.parse import urlparse
 import os
-import random
 
 from tensorflow.keras import regularizers
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
@@ -24,21 +15,16 @@ parser.add_argument('imageset', metavar='imageset', type=str, help='Path to the 
 parser.add_argument('tokenizer', metavar='tokenizer', type=str, help='Path to a tokenizer with associated metrics')
 parser.add_argument('model', metavar='model', type=str, nargs='?', help='Path to a pre-generated model (optional)', default=None)
 
-from tensorflow.python.keras.layers.recurrent import SimpleRNN
 import numpy as np
 import tensorflow as tf
 
-from tensorflow import keras
-import keras.utils.np_utils
 from tensorflow.keras import layers
 from tensorflow.keras.preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.layers import Input, Dense, Flatten, Embedding, LSTM, ReLU, BatchNormalization, Lambda, Concatenate, Reshape, concatenate, SimpleRNN, TimeDistributed
-from tensorflow.keras.regularizers import L2
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Input, Dense, Flatten, Embedding, LSTM, BatchNormalization, Lambda, concatenate, Dropout
 from keras.utils.vis_utils import plot_model
+from tensorflow.keras.optimizers import Adam
 
-from typing import Tuple, List
+from data_generator import generate_training_data
 
 #details:
 #   day-of-week of post,
@@ -78,102 +64,6 @@ WEIGHTS = {
     5:180,
     6:2900
     }
-def symbolise(thing:str):
-    if thing[0] == '@':
-        return '<username>'
-    
-    if thing.replace('.','',1).isdigit():
-        return '<number>'
-    
-    if urlparse(thing).netloc != '':
-        return urlparse(thing).netloc
-    
-    return thing
-
-class TrainingData():
-    def __init__(self, i_data, t_data, u_data, truth):
-        training_num = 0.8
-        self.i_train, self.t_train, self.u_train, self.truth_train = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
-        self.i_valid, self.t_valid, self.u_valid, self.truth_valid = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
-
-        #sort by category
-        print('TrainingData: Sorting by category')
-        i_samples = {k:[] for k in range(CATEGORIES)}
-        t_samples = {k:[] for k in range(CATEGORIES)}
-        u_samples = {k:[] for k in range(CATEGORIES)}
-
-        for (i,t,u,tr) in zip(i_data,t_data,u_data,truth):
-            i_samples[tr].append(i)
-            t_samples[tr].append(t)
-            u_samples[tr].append(u)
-
-        #convert into arrays
-        print('TrainingData: Converting to Arrays')
-        for i in range(CATEGORIES):
-            i_samples[i] = np.array(i_samples[i], dtype='uint8')
-            t_samples[i] = np.array(t_samples[i], dtype='uint32')
-            u_samples[i] = np.array(u_samples[i])
-
-        #split
-        print('TrainingData: Splitting Train/Validate')
-        for i in range(CATEGORIES):
-            i_s = i_samples[i]
-            t_s = t_samples[i]
-            u_s = u_samples[i]
-
-            s = int(len(i_s)*training_num)
-            (i_t,i_v) = np.split(i_s, [s])
-            (t_t,t_v) = np.split(t_s, [s])
-            (u_t,u_v) = np.split(u_s, [s])
-
-            if len(i_t) != 0:
-                self.i_train = np.concatenate((self.i_train,i_t))
-                self.t_train = np.concatenate((self.t_train,t_t))
-                self.u_train = np.concatenate((self.u_train,u_t))
-                self.i_valid = np.concatenate((self.i_valid,i_v))
-                self.t_valid = np.concatenate((self.t_valid,t_v))
-                self.u_valid = np.concatenate((self.u_valid,u_v))
-
-                self.truth_train = np.concatenate((self.truth_train, np.array([[i]] * len(i_t))))
-                self.truth_valid = np.concatenate((self.truth_valid, np.array([[i]] * len(i_v))))
-
-        self.i_train = self.i_train[1:]
-        self.t_train = self.t_train[1:]
-        self.u_train = self.u_train[1:]
-        self.i_valid = self.i_valid[1:]
-        self.t_valid = self.t_valid[1:]
-        self.u_valid = self.u_valid[1:]
-        self.truth_train = self.truth_train[1:]
-        self.truth_valid = self.truth_valid[1:]
-
-        print("Category Train/Validation split is as follows:")
-        t_cats, v_cats = {k:0 for k in range(CATEGORIES)}, {k:0 for k in range(CATEGORIES)},
-        for c in self.truth_train:
-            t_cats[c[0]] += 1
-        for c in self.truth_valid:
-            v_cats[c[0]] += 1
-
-        print(t_cats)
-        print(v_cats)
-
-        #to categories
-        print('TrainingData: Categorising truth values')
-        self.truth_train = keras.utils.np_utils.to_categorical(self.truth_train, CATEGORIES)
-        self.truth_valid = keras.utils.np_utils.to_categorical(self.truth_valid, CATEGORIES)
-    
-    def x_train(self):
-        print(self.t_train.shape)
-        return [self.i_train, self.t_train, self.u_train]
-    
-    def y_train(self):
-        return self.truth_train
-
-    def x_valid(self):
-        return [self.i_valid, self.t_valid, self.u_valid]
-    
-    def y_valid(self):
-        return self.truth_valid
-
 #create a tokenizer
 def create_tokenizer(data, max_words=None):
     tweets = len(data)
@@ -230,9 +120,9 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
 
         t_branch = tf.keras.Model(inputs=text_input, outputs= t_branch)
+
         '''
         t_branch.summary()
-        plot_model(t_branch, to_file='model_plot.png', show_shapes=True)
 
         t_branch.compile(optimizer='Adam', metrics=['accuracy'], loss='categorical_crossentropy')
         h = t_branch.fit(
@@ -255,13 +145,12 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         plt.xlabel('epoch')
         plt.legend(['train', 'test'], loc='upper left')
         plt.savefig('lstm_training.png')
-
-        '''
         print('Trained LSTM branch. Saving...')
         t_branch.save(directory_path)
+        '''
 
-    #for l in t_branch.layers:
-    #    l.trainable = False
+    for l in t_branch.layers:
+        l.trainable = False
 
     print('Attaching branch input to LSTM layer')
     #t_branch = pre_joint_embed_layers(t_branch.layers[-2].output,512,256)
@@ -290,18 +179,20 @@ def build_model_test(name, data, word_count, text_input_length, text_dimensions)
     text_input = Input(shape=(LSTM_LENGTH,))
 
     #generate branches
-    t_branch = lstm_branch(name, data, word_count, text_input, text_dimensions)
+    t_input = lstm_branch(name, data, word_count, text_input, text_dimensions)
+    t_branch = BatchNormalization()(t_input.output)
 
     d_input = Input(shape=(DETAIL_FEATURES,))
-    d_branch = Dense(256, kernel_regularizer=regularizers.l2(0.05))(d_input)
-    joint = concatenate([t_branch.output, d_branch])
+    joint = concatenate([t_branch, d_input])
     model = Dense(256, kernel_regularizer=regularizers.l2(0.05))(joint)
+    model = Dropout(0.3)(model)
     model = Dense(128, kernel_regularizer=regularizers.l2(0.05))(model)
+    model = Dropout(0.3)(model)
     
     #output layer
     model = Dense(CATEGORIES, activation='softmax')(model)
     
-    final = tf.keras.Model(inputs=[t_branch.input, d_input], outputs = model)
+    final = tf.keras.Model(inputs=[t_input.input, d_input], outputs = model)
     print("Generated Model")
     final.summary()
 
@@ -332,83 +223,6 @@ def build_model(name, data, word_count, text_input_length, text_dimensions):
     final = tf.keras.Model(inputs = [image_input, text_input, d_branch], outputs=model)
     print("Generated model")
     return final
-
-#turns a tweet into an input. tokenizer is optional, in case data is already tokenized.
-def tweet_to_training_pair(tweet, image_directory, input_sizeone):
-    '''
-    #check for image, else produce blank image
-    path = '{}/{}.jpg'.format(image_directory, tweet['id'])
-    if os.path.isfile(path):
-        image = np.asarray(Image.open(path, ).convert('RGB').resize((150,150)))
-    else:
-        image = DEFAULT_IMAGE
-    '''
-
-    #get text
-    text = tweet['text']
-
-    #get user data
-    posted = datetime.fromtimestamp(tweet['created_at'])
-    user_data = list(map(int, [
-        posted.weekday(),
-        (posted - posted.replace(hour=0,minute=0,second=0)).seconds,
-        (datetime.now() - datetime.strptime(tweet['author_data']['created_at'], '%Y-%m-%dT%H:%M:%S.000Z')).days / 30,
-        tweet['author_data']['public_metrics']['followers_count'],
-        tweet['author_data']['public_metrics']['following_count'],
-        tweet['author_data']['public_metrics']['tweet_count'],
-        tweet['author_data']['public_metrics']['listed_count'],
-        tweet['author_data']['verified']
-    ]))
-
-    products = []
-    for x in range(len(user_data)-1):
-        for y in range(x+1, len(user_data)):
-            products.append(user_data[x] * user_data[y])
-
-    user_features = np.array(user_data+products, dtype='float32')
-
-    #get ground truth for one-hot encoding
-    #we'll use 7 categories for now, with the 6th being anything above 100k likes
-    likes = int(tweet['final_metrics']['like_count'])
-    i = 0
-    while THRESHOLDS[i] < likes:
-        i += 1
-
-    return ((None, text, user_features), i)
-
-def generate_training_data(data, image_directory,text_input_size,tokenizer=None):
-    i_data, t_data, u_data, truth = [], [], [], []
-    splitter = TweetTokenizer(reduce_len=True, preserve_case=False)
-    tweets = len(data)
-
-    counter = 0
-    #randomise order
-    random.shuffle(data)
-    for tweet in data:
-        ((_,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size)
-
-        #i_data.append(i)
-        i_data.append([0])
-        t_data.append(t)
-        u_data.append(u)
-        truth.append(tr)
-        counter +=1 
-        print('Converted {}/{} tweets'.format(counter,tweets), end='\r')
-
-    print()
-    #tokenize
-    print('Tokenizing...')
-    t_data = tokenizer.texts_to_sequences(
-        [
-            [symbolise(s) for s in splitter.tokenize(t)]
-            if len(splitter.tokenize(t)) > 0 else [0]
-            for t in t_data
-        ]
-    )
-    t_data = pad_sequences(t_data, maxlen=LSTM_LENGTH)
-    print('Done.')
-
-    return TrainingData(i_data, t_data, u_data, truth)
 
 def main():
     args = vars(parser.parse_args())
@@ -461,12 +275,9 @@ def main():
     
     print(model.predict([i,t,u]))
     '''
-    model.compile(optimizer='Adam', metrics=['accuracy'], loss='categorical_crossentropy')
+    model.compile(optimizer=Adam(clipvalue=5) , metrics=['accuracy'], loss='categorical_crossentropy')
     model.summary()
 
-    for (_,d) in zip(range(100),zip(model.predict([formatted_data.x_train()[1],formatted_data.x_train()[2]]),formatted_data.y_train())):
-        print(d)
-    
     h = model.fit(
         x=[formatted_data.x_train()[1],formatted_data.x_train()[2]],
         y=formatted_data.y_train(),
@@ -479,12 +290,14 @@ def main():
         #steps_per_epoch=len(data.y_train())//100
     )
 
-
     plt.plot(h.history['accuracy'])
     plt.plot(h.history['val_accuracy'])
     plt.title('model accuracy')
     plt.ylabel('accuracy')
     plt.xlabel('epoch')
     plt.legend(['train', 'test'], loc='upper left')
-    plt.savefig('lstm_training.png')
+    plt.savefig('full_training.png')
+
+    model.save('./Models/{}_Trained'.format(name))
+    print('Saved model to ./Models/{}_Trained'.format(name))
 main()
