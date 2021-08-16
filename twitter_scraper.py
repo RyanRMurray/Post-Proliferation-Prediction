@@ -37,12 +37,15 @@ def convert_to_epoch(t):
     utc= datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%fZ")
     return (utc - datetime(1970,1,1)).total_seconds()
 
-#get a number of pure tweets
+#get a number of pure (non-retweet) tweets
 def get_tweets(target : int, outfile : str):
     query = {
+        #Twitter does not have a command for general queries, so we use 'the -the',
+        #which ends up not filtering anything
         "query": "lang:en -is:retweet the -the",
         "max_results": "100",
-        "tweet.fields": "author_id,created_at,in_reply_to_user_id,entities,public_metrics,attachments,context_annotations,reply_settings"
+        #collect a wide net of data in case we develop more elaborate approaches later
+        "tweet.fields": "author_id,created_at,entities,public_metrics,attachments,context_annotations"
     }
     query_start = time.time()
     newest_id = 0
@@ -92,7 +95,7 @@ def get_tweets(target : int, outfile : str):
 
         file.write("\n]")
 
-#get update on tweets
+#get updates for tweets
 def updates_for(tweets : str, to_file : str):
     fields = ["timestamp","id","likes","retweets","quotes"]
 
@@ -196,7 +199,6 @@ def retrieve_images(tweets : str, directory : str):
     print("Done!")
 
 #collect author details and add to records. Duplicated data, but simplifies input process later.
-#900 requests per 15 min 
 def author_details(directories : List[str]):
     file_count = len(directories)
     file_num = 0

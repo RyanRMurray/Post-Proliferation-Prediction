@@ -10,7 +10,9 @@ from PIL import Image
 import gc
 import matplotlib.pyplot as plt
 from nltk.tokenize import TweetTokenizer
+from urllib.parse import urlparse
 import os
+import random
 
 from tensorflow.keras import regularizers
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
@@ -25,9 +27,9 @@ parser.add_argument('model', metavar='model', type=str, nargs='?', help='Path to
 from tensorflow.python.keras.layers.recurrent import SimpleRNN
 import numpy as np
 import tensorflow as tf
+
 from tensorflow import keras
 import keras.utils.np_utils
-
 from tensorflow.keras import layers
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -54,12 +56,45 @@ LSTM_GENERATIONS = 100
 LSTM_LENGTH      = 150
 IMAGE_SHAPE = (1)
 DEFAULT_IMAGE = np.zeros(IMAGE_SHAPE)
+THRESHOLDS = [0, 10, 100, 1000, 10000, 100000, 999999999999]
+#class weights for imbalanced input
+'''
+WEIGHTS = {
+    0:1,
+    1:1.5,
+    2:10,
+    3:100,
+    4:1000,
+    5:10000,
+    6:100000
+    }
+'''
+WEIGHTS = {
+    0:1,
+    1:1,
+    2:1,
+    3:1,
+    4:8,
+    5:180,
+    6:2900
+    }
+def symbolise(thing:str):
+    if thing[0] == '@':
+        return '<username>'
+    
+    if thing.replace('.','',1).isdigit():
+        return '<number>'
+    
+    if urlparse(thing).netloc != '':
+        return urlparse(thing).netloc
+    
+    return thing
 
 class TrainingData():
     def __init__(self, i_data, t_data, u_data, truth):
         training_num = 0.8
-        self.i_train, self.t_train, self.u_train, self.truth_train = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,150),dtype='uint16'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
-        self.i_valid, self.t_valid, self.u_valid, self.truth_valid = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,150),dtype='uint16'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
+        self.i_train, self.t_train, self.u_train, self.truth_train = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
+        self.i_valid, self.t_valid, self.u_valid, self.truth_valid = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
 
         #sort by category
         print('TrainingData: Sorting by category')
@@ -76,7 +111,7 @@ class TrainingData():
         print('TrainingData: Converting to Arrays')
         for i in range(CATEGORIES):
             i_samples[i] = np.array(i_samples[i], dtype='uint8')
-            t_samples[i] = np.array(t_samples[i], dtype='uint16')
+            t_samples[i] = np.array(t_samples[i], dtype='uint32')
             u_samples[i] = np.array(u_samples[i])
 
         #split
@@ -111,14 +146,23 @@ class TrainingData():
         self.truth_train = self.truth_train[1:]
         self.truth_valid = self.truth_valid[1:]
 
+        print("Category Train/Validation split is as follows:")
+        t_cats, v_cats = {k:0 for k in range(CATEGORIES)}, {k:0 for k in range(CATEGORIES)},
+        for c in self.truth_train:
+            t_cats[c[0]] += 1
+        for c in self.truth_valid:
+            v_cats[c[0]] += 1
+
+        print(t_cats)
+        print(v_cats)
+
         #to categories
         print('TrainingData: Categorising truth values')
         self.truth_train = keras.utils.np_utils.to_categorical(self.truth_train, CATEGORIES)
         self.truth_valid = keras.utils.np_utils.to_categorical(self.truth_valid, CATEGORIES)
-
-        #note:  we dont shuffle since the fitting algorithm does that for us
     
     def x_train(self):
+        print(self.t_train.shape)
         return [self.i_train, self.t_train, self.u_train]
     
     def y_train(self):
@@ -171,16 +215,6 @@ def pre_joint_embed_layers(inputs, fc1,fc2):
 
 def lstm_branch(name, data, word_num, text_input, text_dimensions):
     directory_path = './Models/{}/LSTM'.format(name)
-    #class weights for imbalanced input
-    weights = {
-        0:1,
-        1:1.5,
-        2:10,
-        3:100,
-        4:1000,
-        5:10000,
-        6:100000
-    }
 
     if os.path.isdir(directory_path):
         print('Loading trained LSTM Branch')
@@ -189,18 +223,16 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
     else:
         print('Generating LSTM Branch')
         #t_branch = Embedding(word_num, text_dimensions)(text_input)
-        t_branch = Embedding(50_000, 100)(text_input)
+        t_branch = Embedding(100_000, 100)(text_input)
         t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
 
         #train t_branch
         t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
 
         t_branch = tf.keras.Model(inputs=text_input, outputs= t_branch)
+        '''
         t_branch.summary()
         plot_model(t_branch, to_file='model_plot.png', show_shapes=True)
-
-        print(data.x_valid()[1].dtype)
-        print(data.y_valid().shape)
 
         t_branch.compile(optimizer='Adam', metrics=['accuracy'], loss='categorical_crossentropy')
         h = t_branch.fit(
@@ -208,9 +240,11 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
             y=data.y_train(),
             validation_data=(data.x_valid()[1],data.y_valid()),
             epochs=LSTM_GENERATIONS,
-            batch_size=1000,
+            batch_size=100,
             verbose=1,
-            class_weight=weights,
+            class_weight=WEIGHTS,
+            #validation_steps=len(data.y_valid())//100,
+            #steps_per_epoch=len(data.y_train())//100
         )
 
 
@@ -222,13 +256,18 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         plt.legend(['train', 'test'], loc='upper left')
         plt.savefig('lstm_training.png')
 
+        '''
         print('Trained LSTM branch. Saving...')
         t_branch.save(directory_path)
 
+    #for l in t_branch.layers:
+    #    l.trainable = False
+
     print('Attaching branch input to LSTM layer')
-    t_branch = pre_joint_embed_layers(t_branch.layers[-2].output,512,256)
+    #t_branch = pre_joint_embed_layers(t_branch.layers[-2].output,512,256)
     print("Generated lstm branch")
-    
+
+    t_branch = tf.keras.Model(inputs=t_branch.input , outputs= t_branch.layers[-2].output)
     return t_branch
 
 def cnn_branch():
@@ -247,12 +286,34 @@ def cnn_branch():
     print("Generated cnn branch")
     return (i_branch, inceptionresnet.input)
 
+def build_model_test(name, data, word_count, text_input_length, text_dimensions):
+    text_input = Input(shape=(LSTM_LENGTH,))
+
+    #generate branches
+    t_branch = lstm_branch(name, data, word_count, text_input, text_dimensions)
+
+    d_input = Input(shape=(DETAIL_FEATURES,))
+    d_branch = Dense(256, kernel_regularizer=regularizers.l2(0.05))(d_input)
+    joint = concatenate([t_branch.output, d_branch])
+    model = Dense(256, kernel_regularizer=regularizers.l2(0.05))(joint)
+    model = Dense(128, kernel_regularizer=regularizers.l2(0.05))(model)
+    
+    #output layer
+    model = Dense(CATEGORIES, activation='softmax')(model)
+    
+    final = tf.keras.Model(inputs=[t_branch.input, d_input], outputs = model)
+    print("Generated Model")
+    final.summary()
+
+    return final
+
+
 def build_model(name, data, word_count, text_input_length, text_dimensions):
     text_input = Input(shape=(LSTM_LENGTH,))
 
     #generate branches
     t_branch = lstm_branch(name, data, word_count, text_input, text_dimensions)
-    raise Exception
+    
     (i_branch, image_input) = cnn_branch()
     d_branch = Input(shape=(DETAIL_FEATURES,))
     #joint embedding and convolution
@@ -274,7 +335,6 @@ def build_model(name, data, word_count, text_input_length, text_dimensions):
 
 #turns a tweet into an input. tokenizer is optional, in case data is already tokenized.
 def tweet_to_training_pair(tweet, image_directory, input_sizeone):
-
     '''
     #check for image, else produce blank image
     path = '{}/{}.jpg'.format(image_directory, tweet['id'])
@@ -308,22 +368,22 @@ def tweet_to_training_pair(tweet, image_directory, input_sizeone):
     user_features = np.array(user_data+products, dtype='float32')
 
     #get ground truth for one-hot encoding
-    #one class for 0, 1 class for magnitude 1, ect.
-    #we'll use 6 categories for now, with the 6th being anything above 100k likes
+    #we'll use 7 categories for now, with the 6th being anything above 100k likes
     likes = int(tweet['final_metrics']['like_count'])
-    if likes >= 100_000:
-        mag = 6
-    else:
-        mag = 0 if likes == 0 else int(math.log10(likes))+1
+    i = 0
+    while THRESHOLDS[i] < likes:
+        i += 1
 
-    return ((None, text, user_features), mag)
+    return ((None, text, user_features), i)
 
 def generate_training_data(data, image_directory,text_input_size,tokenizer=None):
     i_data, t_data, u_data, truth = [], [], [], []
-    splitter = TweetTokenizer(strip_handles=True, reduce_len=True, preserve_case=False)
+    splitter = TweetTokenizer(reduce_len=True, preserve_case=False)
     tweets = len(data)
 
     counter = 0
+    #randomise order
+    random.shuffle(data)
     for tweet in data:
         ((_,t,u),tr) = tweet_to_training_pair(tweet,image_directory,text_input_size)
 
@@ -336,9 +396,15 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
         print('Converted {}/{} tweets'.format(counter,tweets), end='\r')
 
     print()
-    print('Tokenizing...')
     #tokenize
-    t_data = tokenizer.texts_to_sequences([splitter.tokenize(t)  if len(splitter.tokenize(t)) > 0 else [0] for t in t_data])
+    print('Tokenizing...')
+    t_data = tokenizer.texts_to_sequences(
+        [
+            [symbolise(s) for s in splitter.tokenize(t)]
+            if len(splitter.tokenize(t)) > 0 else [0]
+            for t in t_data
+        ]
+    )
     t_data = pad_sequences(t_data, maxlen=LSTM_LENGTH)
     print('Done.')
 
@@ -366,6 +432,7 @@ def main():
     print('Generating training/validation data')
     formatted_data = generate_training_data(data, args['imageset'], text_input_length, tokenizer)
     print('Generated Training data')
+
     
     #load model, or create one if no directory supplied
     if args['model'] is None:
@@ -373,10 +440,11 @@ def main():
         print('Creating model from input.')
         print('Enter a name for this model: ')
         name = input()
-        model : tf.keras.Model = build_model(name, formatted_data, word_count, text_input_length, dims)
+        model : tf.keras.Model = build_model_test(name, formatted_data, word_count, text_input_length, dims)
+        #model : tf.keras.Model = build_model(name, formatted_data, word_count, text_input_length, dims)
         model._name = name
         model.save('./Models/{}'.format(name))
-        print('Saved model to ./Models{}'.format(name))
+        print('Saved model to ./Models/{}'.format(name))
     else:
         print('Loading model')
         model : tf.keras.Model = tf.keras.models.load_model(args['model'])
@@ -393,5 +461,30 @@ def main():
     
     print(model.predict([i,t,u]))
     '''
+    model.compile(optimizer='Adam', metrics=['accuracy'], loss='categorical_crossentropy')
+    model.summary()
+
+    for (_,d) in zip(range(100),zip(model.predict([formatted_data.x_train()[1],formatted_data.x_train()[2]]),formatted_data.y_train())):
+        print(d)
     
+    h = model.fit(
+        x=[formatted_data.x_train()[1],formatted_data.x_train()[2]],
+        y=formatted_data.y_train(),
+        validation_data=([formatted_data.x_valid()[1],formatted_data.x_valid()[2]],formatted_data.y_valid()),
+        epochs=LSTM_GENERATIONS,
+        batch_size=100,
+        verbose=1,
+        class_weight=WEIGHTS,
+        #validation_steps=len(data.y_valid())//100,
+        #steps_per_epoch=len(data.y_train())//100
+    )
+
+
+    plt.plot(h.history['accuracy'])
+    plt.plot(h.history['val_accuracy'])
+    plt.title('model accuracy')
+    plt.ylabel('accuracy')
+    plt.xlabel('epoch')
+    plt.legend(['train', 'test'], loc='upper left')
+    plt.savefig('lstm_training.png')
 main()
