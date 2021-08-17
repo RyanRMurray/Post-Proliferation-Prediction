@@ -113,17 +113,17 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
     else:
         print('Generating LSTM Branch')
         #t_branch = Embedding(word_num, text_dimensions)(text_input)
-        t_branch = Embedding(100_000, 100)(text_input)
-        t_branch = LSTM(256, dropout=0.3, kernel_regularizer=regularizers.l2(0.05))(t_branch)
+        t_branch = Embedding(100_000, 100, input_length=LSTM_LENGTH)(text_input)
+        t_branch = LSTM(256, dropout=0.4, kernel_regularizer=regularizers.l2(0.05))(t_branch)
 
         #train t_branch
         t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
-
+        
         t_branch = tf.keras.Model(inputs=text_input, outputs= t_branch)
-
         '''
-        t_branch.summary()
+        plot_model(t_branch, to_file='./Images/lstm_plot.png', show_shapes=True)
 
+        t_branch.summary()
         t_branch.compile(optimizer='Adam', metrics=['accuracy'], loss='categorical_crossentropy')
         h = t_branch.fit(
             x=data.x_train()[1],
@@ -132,11 +132,8 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
             epochs=LSTM_GENERATIONS,
             batch_size=100,
             verbose=1,
-            class_weight=WEIGHTS,
-            #validation_steps=len(data.y_valid())//100,
-            #steps_per_epoch=len(data.y_train())//100
+            class_weight=WEIGHTS
         )
-
 
         plt.plot(h.history['accuracy'])
         plt.plot(h.history['val_accuracy'])
@@ -144,13 +141,15 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         plt.ylabel('accuracy')
         plt.xlabel('epoch')
         plt.legend(['train', 'test'], loc='upper left')
-        plt.savefig('lstm_training.png')
+        plt.savefig('./Images/lstm_training.png')
         print('Trained LSTM branch. Saving...')
         t_branch.save(directory_path)
+
+        t_branch = tf.keras.models.load_model(directory_path)
         '''
 
-    for l in t_branch.layers:
-        l.trainable = False
+    #for l in t_branch.layers:
+    #    l.trainable = False
 
     print('Attaching branch input to LSTM layer')
     #t_branch = pre_joint_embed_layers(t_branch.layers[-2].output,512,256)
@@ -264,7 +263,7 @@ def main():
         model : tf.keras.Model = tf.keras.models.load_model(args['model'])
         print('Model loaded')
     
-    plot_model(model, to_file='model_plot.png', show_shapes=True)
+    plot_model(model, to_file='full_model_plot.png', show_shapes=True)
 
     '''
     #some testing code + example singular input
@@ -296,7 +295,7 @@ def main():
     plt.ylabel('accuracy')
     plt.xlabel('epoch')
     plt.legend(['train', 'test'], loc='upper left')
-    plt.savefig('full_training.png')
+    plt.savefig('./Images/full_training.png')
 
     model.save('./Models/{}_Trained'.format(name))
     print('Saved model to ./Models/{}_Trained'.format(name))

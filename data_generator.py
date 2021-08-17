@@ -29,8 +29,8 @@ def symbolise(thing:str):
 class TrainingData():
     def __init__(self, i_data, t_data, u_data, truth):
         training_num = 0.8
-        self.i_train, self.t_train, self.u_train, self.truth_train = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
-        self.i_valid, self.t_valid, self.u_valid, self.truth_valid = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.empty(shape=(1,DETAIL_FEATURES)),np.empty(shape=(1,1))
+        self.i_train, self.t_train, self.u_train, self.truth_train = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.zeros(shape=(1,DETAIL_FEATURES), dtype='uint32'),np.empty(shape=(1,1))
+        self.i_valid, self.t_valid, self.u_valid, self.truth_valid = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.zeros(shape=(1,DETAIL_FEATURES), dtype='uint32'),np.empty(shape=(1,1))
 
         #sort by category
         print('TrainingData: Sorting by category')
@@ -48,11 +48,17 @@ class TrainingData():
         for i in range(CATEGORIES):
             i_samples[i] = np.array(i_samples[i], dtype='uint8')
             t_samples[i] = np.array(t_samples[i], dtype='uint32')
-            u_samples[i] = np.array(u_samples[i])
+            u_samples[i] = np.array(u_samples[i], dtype='uint32')
 
         print('Normalising user data')
+        #find max in each part of vector
+        maximums = np.zeros((1,DETAIL_FEATURES), dtype='uint32')
         for i in range(CATEGORIES):
-            u_samples[i] = u_samples[i] / u_samples[i].max(axis=0)
+            maximums = [np.concatenate((maximums, u_samples[i])).max(axis=0)]
+        
+        #normalise
+        for i in range(CATEGORIES):
+            u_samples[i] = u_samples[i] / maximums
 
         #split
         print('TrainingData: Splitting Train/Validate')
@@ -66,7 +72,7 @@ class TrainingData():
             (t_t,t_v) = np.split(t_s, [s])
             (u_t,u_v) = np.split(u_s, [s])
 
-            if len(i_t) != 0:
+            if len(i_v) != 0:
                 self.i_train = np.concatenate((self.i_train,i_t))
                 self.t_train = np.concatenate((self.t_train,t_t))
                 self.u_train = np.concatenate((self.u_train,u_t))
@@ -122,7 +128,7 @@ class TrainingData():
         ]
 
     def truth(self):
-        return np.concantenate([self.truth_train,self.truth_valid])
+        return np.concatenate([self.truth_train,self.truth_valid])
 
 #turns a tweet into an input. tokenizer is optional, in case data is already tokenized.
 def tweet_to_training_pair(tweet, image_directory, input_sizeone):
