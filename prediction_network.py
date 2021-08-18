@@ -37,18 +37,17 @@ from data_generator import generate_training_data
 #   author verified status
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
-CATEGORIES      = 7
+CATEGORIES      = 6
 LSTM_GENERATIONS = 100
 LSTM_LENGTH      = 150
 IMAGE_SHAPE = (1)
 DEFAULT_IMAGE = np.zeros(IMAGE_SHAPE)
-THRESHOLDS = [0, 10, 100, 1000, 10000, 100000, 999999999999]
+THRESHOLDS = [10, 100, 1000, 10000, 100000, 999999999999]
 #class weights for imbalanced input
-'''
 WEIGHTS = {
     0:1,
     1:1.5,
-    2:10,
+    2:15,
     3:100,
     4:1000,
     5:10000,
@@ -64,6 +63,7 @@ WEIGHTS = {
     5:180,
     6:2900
     }
+'''
 #create a tokenizer
 def create_tokenizer(data, max_words=None):
     tweets = len(data)
@@ -114,13 +114,13 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         print('Generating LSTM Branch')
         #t_branch = Embedding(word_num, text_dimensions)(text_input)
         t_branch = Embedding(100_000, 100, input_length=LSTM_LENGTH)(text_input)
-        t_branch = LSTM(256, dropout=0.4, kernel_regularizer=regularizers.l2(0.05))(t_branch)
+        t_branch = LSTM(256, kernel_regularizer=regularizers.l2(0.05))(t_branch)
 
         #train t_branch
         t_branch = Dense(CATEGORIES, activation='softmax')(t_branch)
         
         t_branch = tf.keras.Model(inputs=text_input, outputs= t_branch)
-        '''
+        
         plot_model(t_branch, to_file='./Images/lstm_plot.png', show_shapes=True)
 
         t_branch.summary()
@@ -130,7 +130,7 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
             y=data.y_train(),
             validation_data=(data.x_valid()[1],data.y_valid()),
             epochs=LSTM_GENERATIONS,
-            batch_size=100,
+            batch_size=1000,
             verbose=1,
             class_weight=WEIGHTS
         )
@@ -146,14 +146,9 @@ def lstm_branch(name, data, word_num, text_input, text_dimensions):
         t_branch.save(directory_path)
 
         t_branch = tf.keras.models.load_model(directory_path)
-        '''
 
-    #for l in t_branch.layers:
-    #    l.trainable = False
-
-    print('Attaching branch input to LSTM layer')
-    #t_branch = pre_joint_embed_layers(t_branch.layers[-2].output,512,256)
-    print("Generated lstm branch")
+    for l in t_branch.layers:
+        l.trainable = False
 
     t_branch = tf.keras.Model(inputs=t_branch.input , outputs= t_branch.layers[-2].output)
     return t_branch
@@ -224,6 +219,8 @@ def build_model(name, data, word_count, text_input_length, text_dimensions):
     return final
 
 def main():
+    print('Enter a name for this model: ')
+    name = input()
     args = vars(parser.parse_args())
 
     if not os.path.isdir(args['imageset']):
@@ -251,8 +248,6 @@ def main():
     if args['model'] is None:
         #create and save model
         print('Creating model from input.')
-        print('Enter a name for this model: ')
-        name = input()
         model : tf.keras.Model = build_model_test(name, formatted_data, word_count, text_input_length, dims)
         #model : tf.keras.Model = build_model(name, formatted_data, word_count, text_input_length, dims)
         model._name = name
@@ -282,7 +277,7 @@ def main():
         y=formatted_data.y_train(),
         validation_data=([formatted_data.x_valid()[1],formatted_data.x_valid()[2]],formatted_data.y_valid()),
         epochs=LSTM_GENERATIONS,
-        batch_size=100,
+        batch_size=1000,
         verbose=1,
         class_weight=WEIGHTS,
         #validation_steps=len(data.y_valid())//100,

@@ -8,11 +8,50 @@ from urllib.parse import urlparse
 
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
-THRESHOLDS = [0, 10, 100, 1000, 10000, 100000, 999999999999]
-CATEGORIES      = 7
+THRESHOLDS = [10, 100, 1000, 10000, 100000, 999999999999]
+CATEGORIES      = 6
 LSTM_LENGTH      = 150
 IMAGE_SHAPE = (1)
 DEFAULT_IMAGE = np.zeros(IMAGE_SHAPE)
+DETAIL_MAXIMUMS = np.array([
+        6,
+        81181,
+        628,
+        73061888,
+        2043341,
+        39488624,
+        210150,
+        1,
+        450186,
+        3768,
+        301304384,
+        10216705,
+        236931744,
+        1260900,
+        6,
+        48864680,
+        4294081024,
+        4292340480,
+        4294827008,
+        4269498368,
+        81150,
+        4136565248,
+        292197760,
+        3396021760,
+        36986400,
+        187,
+        4272793344,
+        4294827776,
+        4289864448,
+        73061888,
+        4293038080,
+        3989597696,
+        2043341,
+        4256888832,
+        6970388,
+        210150
+    ])
+
 
 def symbolise(thing:str):
     if thing[0] == '@':
@@ -52,13 +91,16 @@ class TrainingData():
 
         print('Normalising user data')
         #find max in each part of vector
-        maximums = np.zeros((1,DETAIL_FEATURES), dtype='uint32')
-        for i in range(CATEGORIES):
-            maximums = [np.concatenate((maximums, u_samples[i])).max(axis=0)]
-        
+        if DETAIL_MAXIMUMS is None:
+            maximums = np.zeros((1,DETAIL_FEATURES), dtype='uint32')
+            for i in range(CATEGORIES):
+                maximums = [np.concatenate((maximums, u_samples[i])).max(axis=0)]
+        else:
+            maximums = DETAIL_MAXIMUMS
         #normalise
         for i in range(CATEGORIES):
-            u_samples[i] = u_samples[i] / maximums
+            if len(u_samples[i]) > 0:
+                u_samples[i] = u_samples[i] / maximums
 
         #split
         print('TrainingData: Splitting Train/Validate')
@@ -80,7 +122,8 @@ class TrainingData():
                 self.t_valid = np.concatenate((self.t_valid,t_v))
                 self.u_valid = np.concatenate((self.u_valid,u_v))
 
-                self.truth_train = np.concatenate((self.truth_train, np.array([[i]] * len(i_t))))
+                if len(i_t) > 0:
+                    self.truth_train = np.concatenate((self.truth_train, np.array([[i]] * len(i_t))))
                 self.truth_valid = np.concatenate((self.truth_valid, np.array([[i]] * len(i_v))))
 
         self.i_train = self.i_train[1:]

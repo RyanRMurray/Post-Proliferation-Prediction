@@ -25,13 +25,14 @@ def evaluate_model(datapath, imagepath, tokenpath, modelpath):
     
     formatted_data = generate_training_data(data, imagepath,LSTM_LENGTH,tokenizer)
 
-    #predictions = model.predict([formatted_data.all()[1],formatted_data.all()[2]])
-    predictions = model.predict(formatted_data.all()[1])
+    predictions = model.predict([formatted_data.all()[1],formatted_data.all()[2]])
+    #predictions = model.predict(formatted_data.all()[1])
     truth       = formatted_data.truth()
 
     #make matrix: row for truth, column for prediction
     matrix = np.zeros(shape=(CATEGORIES,CATEGORIES))
     hits, misses = 0,0
+    mse = 0
     for (p,t) in zip(predictions,truth):
         matrix[np.argmax(t), np.argmax(p)] += 1
         total_bc[np.argmax(t)] += 1
@@ -41,13 +42,17 @@ def evaluate_model(datapath, imagepath, tokenpath, modelpath):
             by_category[np.argmax(t)] += 1
         else:
             misses +=1
+        
+        mse += (np.argmax(t)- np.argmax(p))**2
 
-    return (matrix, hits, misses,by_category,total_bc)
+    mse /= hits + misses
+
+    return (matrix, hits, misses,by_category,total_bc, mse)
 
 def main():
     args = vars(parser.parse_args())
 
-    (matrix,hits,misses,by_category,total_bc) = evaluate_model(args['dataset'], args['imageset'], args['tokenizer'], args['model'])
+    (matrix,hits,misses,by_category,total_bc, mse) = evaluate_model(args['dataset'], args['imageset'], args['tokenizer'], args['model'])
 
     print('{} hits, {} misses, hit rate of {}%.'.format(hits,misses, hits/misses*100))
     print('Individual hit rate:')
@@ -60,6 +65,8 @@ def main():
         print('\tCategory {}: {}/{}, {}%'.format(i, by_category[i],total_bc[i],hitrate))
 
     print(matrix)
+
+    print("MSE = {}".format(mse))
 
 main()
 
