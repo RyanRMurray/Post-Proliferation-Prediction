@@ -6,13 +6,21 @@ from nltk.tokenize import TweetTokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from urllib.parse import urlparse
 
+#details:
+#   day-of-week of post,
+#   time-of-day of post,
+#   author account age,
+#   author followers count,
+#   author following count,
+#   author tweet count,
+#   author in list count,
+#   author verified status
 calc_detail_vector_size = lambda x : sum(range(x+1))
 DETAIL_FEATURES = calc_detail_vector_size(8)
 THRESHOLDS = [10, 100, 1000, 10000, 100000, 999999999999]
 CATEGORIES      = 6
-LSTM_LENGTH      = 150
+SEQ_LENGTH      = 356
 IMAGE_SHAPE = (1)
-DEFAULT_IMAGE = np.zeros(IMAGE_SHAPE)
 DETAIL_MAXIMUMS = np.array([
         6,
         81181,
@@ -52,7 +60,6 @@ DETAIL_MAXIMUMS = np.array([
         210150
     ])
 
-
 def symbolise(thing:str):
     if thing[0] == '@':
         return '<username>'
@@ -66,26 +73,23 @@ def symbolise(thing:str):
     return thing
 
 class TrainingData():
-    def __init__(self, i_data, t_data, u_data, truth):
+    def __init__(self, t_data, u_data, truth):
         training_num = 0.8
-        self.i_train, self.t_train, self.u_train, self.truth_train = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.zeros(shape=(1,DETAIL_FEATURES), dtype='uint32'),np.empty(shape=(1,1))
-        self.i_valid, self.t_valid, self.u_valid, self.truth_valid = np.empty(shape=(1,1), dtype='uint8'),np.empty(shape=(1,LSTM_LENGTH),dtype='uint32'),np.zeros(shape=(1,DETAIL_FEATURES), dtype='uint32'),np.empty(shape=(1,1))
+        self.t_train, self.u_train, self.truth_train = np.empty(shape=(1,SEQ_LENGTH),dtype='uint32'),np.zeros(shape=(1,DETAIL_FEATURES), dtype='uint32'),np.empty(shape=(1,1))
+        self.t_valid, self.u_valid, self.truth_valid = np.empty(shape=(1,SEQ_LENGTH),dtype='uint32'),np.zeros(shape=(1,DETAIL_FEATURES), dtype='uint32'),np.empty(shape=(1,1))
 
         #sort by category
         print('TrainingData: Sorting by category')
-        i_samples = {k:[] for k in range(CATEGORIES)}
         t_samples = {k:[] for k in range(CATEGORIES)}
         u_samples = {k:[] for k in range(CATEGORIES)}
 
-        for (i,t,u,tr) in zip(i_data,t_data,u_data,truth):
-            i_samples[tr].append(i)
+        for (t,u,tr) in zip(t_data,u_data,truth):
             t_samples[tr].append(t)
             u_samples[tr].append(u)
 
         #convert into arrays
         print('TrainingData: Converting to Arrays')
         for i in range(CATEGORIES):
-            i_samples[i] = np.array(i_samples[i], dtype='uint8')
             t_samples[i] = np.array(t_samples[i], dtype='uint32')
             u_samples[i] = np.array(u_samples[i], dtype='uint32')
 
@@ -105,31 +109,25 @@ class TrainingData():
         #split
         print('TrainingData: Splitting Train/Validate')
         for i in range(CATEGORIES):
-            i_s = i_samples[i]
             t_s = t_samples[i]
             u_s = u_samples[i]
 
-            s = int(len(i_s)*training_num)
-            (i_t,i_v) = np.split(i_s, [s])
+            s = int(len(t_s)*training_num)
             (t_t,t_v) = np.split(t_s, [s])
             (u_t,u_v) = np.split(u_s, [s])
 
-            if len(i_v) != 0:
-                self.i_train = np.concatenate((self.i_train,i_t))
+            if len(t_v) != 0:
                 self.t_train = np.concatenate((self.t_train,t_t))
                 self.u_train = np.concatenate((self.u_train,u_t))
-                self.i_valid = np.concatenate((self.i_valid,i_v))
                 self.t_valid = np.concatenate((self.t_valid,t_v))
                 self.u_valid = np.concatenate((self.u_valid,u_v))
 
-                if len(i_t) > 0:
-                    self.truth_train = np.concatenate((self.truth_train, np.array([[i]] * len(i_t))))
-                self.truth_valid = np.concatenate((self.truth_valid, np.array([[i]] * len(i_v))))
+                if len(t_t) > 0:
+                    self.truth_train = np.concatenate((self.truth_train, np.array([[i]] * len(t_t))))
+                self.truth_valid = np.concatenate((self.truth_valid, np.array([[i]] * len(t_v))))
 
-        self.i_train = self.i_train[1:]
         self.t_train = self.t_train[1:]
         self.u_train = self.u_train[1:]
-        self.i_valid = self.i_valid[1:]
         self.t_valid = self.t_valid[1:]
         self.u_valid = self.u_valid[1:]
         self.truth_train = self.truth_train[1:]
@@ -151,21 +149,19 @@ class TrainingData():
         self.truth_valid = keras.utils.np_utils.to_categorical(self.truth_valid, CATEGORIES)
 
     def x_train(self):
-        print(self.t_train.shape)
-        return [self.i_train, self.t_train, self.u_train]
+        return [self.t_train, self.u_train]
     
     def y_train(self):
         return self.truth_train
 
     def x_valid(self):
-        return [self.i_valid, self.t_valid, self.u_valid]
+        return [self.t_valid, self.u_valid]
     
     def y_valid(self):
         return self.truth_valid
 
     def all(self):
         return [
-            np.concatenate([self.i_train, self.i_valid]),
             np.concatenate([self.t_train, self.t_valid]),
             np.concatenate([self.u_train, self.u_valid]),
         ]
@@ -174,16 +170,7 @@ class TrainingData():
         return np.concatenate([self.truth_train,self.truth_valid])
 
 #turns a tweet into an input. tokenizer is optional, in case data is already tokenized.
-def tweet_to_training_pair(tweet, image_directory, input_sizeone):
-    '''
-    #check for image, else produce blank image
-    path = '{}/{}.jpg'.format(image_directory, tweet['id'])
-    if os.path.isfile(path):
-        image = np.asarray(Image.open(path, ).convert('RGB').resize((150,150)))
-    else:
-        image = DEFAULT_IMAGE
-    '''
-
+def tweet_to_training_pair(tweet):
     #get text
     text = tweet['text']
 
@@ -214,11 +201,47 @@ def tweet_to_training_pair(tweet, image_directory, input_sizeone):
     while THRESHOLDS[i] < likes:
         i += 1
 
-    return ((None, text, user_features), i)
+    return ((text, user_features), i)
 
-def generate_training_data(data, image_directory,text_input_size,tokenizer=None):
+def generate_training_data(data,tokenizer=None):
     i_data, t_data, u_data, truth = [], [], [], []
     splitter = TweetTokenizer(reduce_len=True, preserve_case=False)
+    tweets = len(data)
+
+    counter = 0
+    #randomise order
+    random.shuffle(data)
+    for tweet in data:
+        ((_,t,u),tr) = tweet_to_training_pair(tweet)
+
+        t_data.append(t)
+        u_data.append(u)
+        truth.append(tr)
+        counter +=1 
+        print('Converted {}/{} tweets'.format(counter,tweets), end='\r')
+
+    print()
+    #tokenize
+    print('Tokenizing...')
+    t_data = tokenizer.texts_to_sequences(
+        [
+            [symbolise(s) for s in splitter.tokenize(t)]
+            if len(splitter.tokenize(t)) > 0 else [0]
+            for t in t_data
+        ]
+    )
+    t_data = pad_sequences(t_data, maxlen=SEQ_LENGTH)
+    print('Done.')
+
+    return TrainingData(t_data, u_data, truth)
+
+
+#Code beneath this line is depricated but kept for completeness
+###############################################################################
+
+def generate_training_data_old(data, image_directory,text_input_size,tokenizer=None):
+    i_data, t_data, u_data, truth = [], [], [], []
+    splitter = TweetTokenizer(reduce_len=True, preserve_case=False, strip_handles=True)
     tweets = len(data)
 
     counter = 0
@@ -240,12 +263,11 @@ def generate_training_data(data, image_directory,text_input_size,tokenizer=None)
     print('Tokenizing...')
     t_data = tokenizer.texts_to_sequences(
         [
-            [symbolise(s) for s in splitter.tokenize(t)]
-            if len(splitter.tokenize(t)) > 0 else [0]
+            splitter.tokenize(t)
             for t in t_data
         ]
     )
-    t_data = pad_sequences(t_data, maxlen=LSTM_LENGTH)
+    t_data = pad_sequences(t_data, maxlen=text_input_size)
     print('Done.')
 
     return TrainingData(i_data, t_data, u_data, truth)

@@ -140,6 +140,7 @@ dmypy.json
 /Data Sets/*
 /Models/*
 /Tokenizers/*
+/Images/*
 training_text.csv
 lstm_plot.png
 .gitignore

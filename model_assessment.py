@@ -1,5 +1,5 @@
 import json
-from data_generator import  generate_training_data, CATEGORIES, LSTM_LENGTH
+from data_generator import  generate_training_data, CATEGORIES
 import pickle
 import tensorflow as tf
 import numpy as np
@@ -23,10 +23,9 @@ def evaluate_model(datapath, imagepath, tokenpath, modelpath):
     print("Loading model")
     model : tf.keras.Model = tf.keras.models.load_model(modelpath)
     
-    formatted_data = generate_training_data(data, imagepath,LSTM_LENGTH,tokenizer)
+    formatted_data = generate_training_data(data,tokenizer)
 
-    predictions = model.predict([formatted_data.all()[1],formatted_data.all()[2]])
-    #predictions = model.predict(formatted_data.all()[1])
+    predictions = model.predict(formatted_data.all())
     truth       = formatted_data.truth()
 
     #make matrix: row for truth, column for prediction
@@ -54,7 +53,7 @@ def main():
 
     (matrix,hits,misses,by_category,total_bc, mse) = evaluate_model(args['dataset'], args['imageset'], args['tokenizer'], args['model'])
 
-    print('{} hits, {} misses, hit rate of {}%.'.format(hits,misses, hits/misses*100))
+    print('{} hits, {} misses, hit rate of {}%.'.format(hits,misses, (hits/(hits+misses))*100))
     print('Individual hit rate:')
 
     for i in range(CATEGORIES):
