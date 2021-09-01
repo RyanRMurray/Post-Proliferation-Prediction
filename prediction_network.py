@@ -1,6 +1,7 @@
 import json
 import math
 import pickle
+from random import shuffle
 import matplotlib.pyplot as plt
 from nltk.tokenize import TweetTokenizer
 import os
@@ -26,34 +27,24 @@ from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.layers import Input, Bidirectional, Dense, Flatten, Embedding, LSTM, BatchNormalization, Lambda, concatenate, Dropout, SpatialDropout1D, GRU, Conv1D, GlobalAveragePooling1D,GlobalMaxPool1D
 from keras.utils.vis_utils import plot_model
 from tensorflow.keras.optimizers import Adam, Adamax
-from tensorflow.keras.callbacks import ModelCheckpoint
+from tensorflow.keras.callbacks import ModelCheckpoint, CSVLogger
 
 gpus = tf.config.experimental.list_physical_devices('GPU')
 for gpu in gpus:
     tf.config.experimental.set_memory_growth(gpu, True)
 
-from data_generator import generate_training_data, DETAIL_FEATURES, CATEGORIES, SEQ_LENGTH, WEIGHTS
+from data_generator import generate_training_data, TrainingData, DETAIL_FEATURES, CATEGORIES, SEQ_LENGTH
 
 #class weights for imbalanced input
-EPOCHS = 10
+EPOCHS = 40 
 WEIGHTS = {
-    0:1,
-    1:24,
-    2:150,
-    3:1_230,
-    4:17_900,
-    5:200_000
-    }
-'''
-WEIGHTS = {
-    0:2,
-    1:1,
-    2:1,
-    3:8,
-    4:180,
-    5:2900
-    }
-'''
+    0:0.17489981752,
+    1:4.17343286701,
+    2:26.4272539289,
+    3:215.372767105,
+    4:3132.40686275,
+    5:35500.6111111
+}
 
 def model_new(matrix):
     #text layer
@@ -88,7 +79,6 @@ def model_new(matrix):
     t_branch = BatchNormalization()(t_branch)
     t_branch = Dense(32, activation='relu')(t_branch)
     t_branch = Dropout(0.2)(t_branch)
-
     #author features layer
     d_input = Input(shape=(DETAIL_FEATURES,))
     d_branch = Dense(128)(d_input)
@@ -96,6 +86,7 @@ def model_new(matrix):
 
     joint =  concatenate([t_branch, d_branch])
     model = Dense(128)(joint)
+    #model = Dense(128)(d_branch)
     model = Dropout(0.1)(model)
     model = Dense(32)(model)
     model = Dropout(0.1)(model)
@@ -104,6 +95,7 @@ def model_new(matrix):
     model = Dense(CATEGORIES, activation='softmax')(model)
 
     final = tf.keras.Model(inputs=[t_input, d_input], outputs = model)
+    #final = tf.keras.Model(inputs= d_input, outputs = model)
     print("Generated Model")
     final.summary()
     plot_model(final, to_file='full_model_plot.png', show_shapes=True)
@@ -153,10 +145,10 @@ def main():
                 print('Loaded file.')
 
             print('Generating data set')
-            formatted = generate_training_data(data, tokenizer=tokenizer)
-        elif args['dataset'][-7:] == 'pickle':
+            formatted : TrainingData  = generate_training_data(data, tokenizer=tokenizer)
+        elif args['dataset'][-7:] == '.pickle':
             with open(args['dataset'],'rb') as f:
-                formatted = json.load(f)
+                formatted : TrainingData = pickle.load(f)
         else:   
             print('Please enter a path to a valid json/pickle file')
             return
@@ -170,16 +162,22 @@ def main():
     print('Training Model')
     model.compile(optimizer=Adamax(learning_rate=0.001) , metrics=['accuracy'], loss='categorical_crossentropy')
 
+    model.save('./Models/{}'.format(name))
+    
+    check = ModelCheckpoint('./Models/Checkpoints/{}'.format(name), monitor='accuracy', save_best_only=True)
+    logger = CSVLogger('./Models/Checkpoints/{}/history.csv'.format(name), append=True)
+
     h = model.fit(
-        x=[formatted.x_train()],
+        x=formatted.x_train(),
+        #x=formatted.x_train()[1],
         y=formatted.y_train(),
         validation_data=(formatted.x_valid(),formatted.y_valid()),
+        #validation_data=(formatted.x_valid()[1],formatted.y_valid()),
         epochs=EPOCHS,
         batch_size=500,
         verbose=1,
         class_weight=WEIGHTS,
-        #validation_steps=len(data.y_valid())//100,
-        #steps_per_epoch=len(data.y_train())//100
+        callbacks=[check,logger]
     )
 
     model.save('./Models/{}_Trained'.format(name))

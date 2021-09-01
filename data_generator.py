@@ -212,7 +212,7 @@ def generate_training_data(data,tokenizer=None):
     #randomise order
     random.shuffle(data)
     for tweet in data:
-        ((_,t,u),tr) = tweet_to_training_pair(tweet)
+        ((t,u),tr) = tweet_to_training_pair(tweet)
 
         t_data.append(t)
         u_data.append(u)

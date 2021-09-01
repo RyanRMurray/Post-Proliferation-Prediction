@@ -9,9 +9,8 @@ parser = argparse.ArgumentParser(description='Generate stats for models')
 parser.add_argument('model', metavar='model', type=str, help='Path to the training data set')
 parser.add_argument('dataset', metavar='dataset', type=str, help='Path to the data set')
 parser.add_argument('tokenizer', metavar='tokenizer', type=str, help='Path to a tokenizer with associated metrics')
-parser.add_argument('imageset', metavar='imageset', type=str, help='Path to the training data set\'s images')
 
-def evaluate_model(datapath, imagepath, tokenpath, modelpath):
+def evaluate_model(datapath, tokenpath, modelpath):
     by_category = {k:0 for k in range(CATEGORIES)}
     total_bc =  {k:0 for k in range(CATEGORIES)}
     print("Loading testing data")
@@ -51,7 +50,7 @@ def evaluate_model(datapath, imagepath, tokenpath, modelpath):
 def main():
     args = vars(parser.parse_args())
 
-    (matrix,hits,misses,by_category,total_bc, mse) = evaluate_model(args['dataset'], args['imageset'], args['tokenizer'], args['model'])
+    (matrix,hits,misses,by_category,total_bc, mse) = evaluate_model(args['dataset'], args['tokenizer'], args['model'])
 
     print('{} hits, {} misses, hit rate of {}%.'.format(hits,misses, (hits/(hits+misses))*100))
     print('Individual hit rate:')
