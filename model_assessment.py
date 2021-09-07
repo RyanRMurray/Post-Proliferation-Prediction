@@ -1,10 +1,19 @@
 from data_generator import CATEGORIES
-from prediction_network import ModelType
+from enum import Enum
+#from prediction_network import ModelType
 import pickle
 import tensorflow as tf
 import numpy as np
 
 import argparse
+
+class ModelType(Enum):
+    Details = "details"
+    Text = "text"
+    Full = "full"
+
+    def __str__(self):
+        return self.value()
 
 parser = argparse.ArgumentParser(description="Generate stats for models")
 parser.add_argument(
@@ -19,12 +28,10 @@ parser.add_argument(
     help="Version of model to assess",
 )
 parser.add_argument(
-    "full_set",
-    metavar="full_set",
-    type=bool,
-    default=True,
-    nargs="?",
-    help="Whether to use the full data set for assessment",
+    "--full-set",
+    dest="full_set",
+    action="store_true",
+    help="Whether to use weights for the balanced set",
 )
 
 
